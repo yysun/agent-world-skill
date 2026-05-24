@@ -8,14 +8,15 @@ const test = require('node:test');
 const skillRoot = path.resolve(__dirname, '..');
 const router = path.join(skillRoot, 'scripts', 'agent-world-router.js');
 
-function makeWorld() {
+function makeWorld(options = {}) {
+  const turnLimit = options.turnLimit || 12;
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'agent-world-router-test-'));
   fs.writeFileSync(path.join(dir, 'agent-world.yaml'), `
 world:
   id: test-world
   name: test-world
   stopToken: "<world>pass</world>"
-  turnLimit: 12
+  turnLimit: ${turnLimit}
 
 workflow:
   type: dag
@@ -223,4 +224,68 @@ test('regression: human paragraph mention maps to the matching workflow node', (
   assert.equal(output.agent, 'architect');
   assert.equal(output.reason, 'human_mention_workflow_node');
   assert.equal(output.workflow.node, 'architecture');
+});
+
+test('regression: completed workflow nodes are scoped to the current run', () => {
+  const world = makeWorld();
+
+  run(world, ['reset']);
+  run(world, ['user', '--stdin'], 'build an electron app');
+  run(world, ['complete', '--turn', 'turn_0001', '--stdin'], '@architect\nPlease design.');
+  run(world, ['complete', '--turn', 'turn_0002', '--stdin'], '@dev\nPlease implement.');
+  run(world, ['complete', '--turn', 'turn_0003', '--stdin'], '@qa\nPlease review.\n\n@sec\nPlease review.');
+  run(world, ['complete', '--turn', 'turn_0004', '--stdin'], '@pm\nQA approved.');
+  run(world, ['complete', '--turn', 'turn_0005', '--stdin'], '@pm\nSecurity approved.');
+  const idle = run(world, ['complete', '--turn', 'turn_0006', '--stdin'], 'Done.');
+  assert.equal(idle.type, 'idle');
+
+  const next = run(world, ['user', '--stdin'], '@pm\nBuild a second app.');
+  assert.equal(next.type, 'agent_instruction');
+  assert.notEqual(next.runId, idle.runId);
+  assert.equal(next.agent, 'pm');
+  assert.equal(next.workflow.node, 'requirements');
+});
+
+test('regression: human mention of duplicated agent does not use stale final prerequisites', () => {
+  const world = makeWorld();
+
+  run(world, ['reset']);
+  const output = run(world, ['user', '--stdin'], '@pm\nBuild an Electron app.');
+
+  assert.equal(output.type, 'agent_instruction');
+  assert.equal(output.agent, 'pm');
+  assert.equal(output.reason, 'human_mention_workflow_node');
+  assert.equal(output.workflow.node, 'requirements');
+});
+
+test('regression: turnLimit blocks additional agent turns in the current run', () => {
+  const world = makeWorld({ turnLimit: 1 });
+
+  run(world, ['reset']);
+  run(world, ['user', '--stdin'], 'build an electron app');
+  const blocked = run(world, ['complete', '--turn', 'turn_0001', '--stdin'], '@architect\nPlease design.');
+
+  assert.equal(blocked.type, 'blocked');
+  assert.equal(blocked.code, 'turn_limit_reached');
+  assert.match(blocked.reason, /turn limit 1 reached/);
+  assert.equal(blocked.completedTurns, 1);
+});
+
+test('regression: off-edge agent mentions return a blocked routing result', () => {
+  const world = makeWorld();
+
+  run(world, ['reset']);
+  run(world, ['user', '--stdin'], 'build an electron app');
+  run(world, ['complete', '--turn', 'turn_0001', '--stdin'], '@architect\nPlease design.');
+  run(world, ['complete', '--turn', 'turn_0002', '--stdin'], '@dev\nPlease implement.');
+  run(world, ['complete', '--turn', 'turn_0003', '--stdin'], '@qa\nPlease review.');
+  const blocked = run(world, ['complete', '--turn', 'turn_0004', '--stdin'], '@dev\nBlocking issue found. Please fix.');
+
+  assert.equal(blocked.type, 'blocked');
+  assert.equal(blocked.code, 'workflow_edge_blocked');
+  assert.equal(blocked.sourceAgent, 'qa');
+  assert.equal(blocked.sourceNode, 'qa_review');
+  assert.deepEqual(blocked.mentions, ['dev']);
+  assert.deepEqual(blocked.allowedNext, ['final']);
+  assert.match(blocked.reason, /qa_review -> implementation/);
 });

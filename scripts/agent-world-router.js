@@ -323,13 +323,15 @@ function newState(config) {
     configPath: config.configPath,
     createdAt: now(),
     updatedAt: now(),
-    counters: { message: 0, turn: 0, action: 0 },
+    counters: { message: 0, turn: 0, action: 0, run: 0, blocked: 0 },
+    currentRunId: null,
     world: config.world,
     workflow: config.workflow,
     agents: config.agents,
     messages: [],
     pendingTurns: [],
     pendingHostActions: [],
+    pendingRoutingErrors: [],
     completedTurns: [],
     completedHostActions: [],
     done: false,
@@ -344,10 +346,32 @@ function hydrateState(state, config) {
   state.workflow = config.workflow;
   state.agents = config.agents;
   state.counters = state.counters || { message: 0, turn: 0, action: 0 };
+  state.counters.run = state.counters.run || 0;
+  state.counters.blocked = state.counters.blocked || 0;
+  state.currentRunId = state.currentRunId || null;
+  state.messages = state.messages || [];
   state.pendingTurns = state.pendingTurns || [];
   state.pendingHostActions = state.pendingHostActions || [];
+  state.pendingRoutingErrors = state.pendingRoutingErrors || [];
   state.completedTurns = state.completedTurns || [];
   state.completedHostActions = state.completedHostActions || [];
+
+  const legacyItems = [
+    ...state.messages,
+    ...state.pendingTurns,
+    ...state.pendingHostActions,
+    ...state.pendingRoutingErrors,
+    ...state.completedTurns,
+    ...state.completedHostActions
+  ];
+  if (!state.currentRunId && legacyItems.length > 0) {
+    state.currentRunId = nextId(state, 'run');
+  }
+  if (state.currentRunId) {
+    for (const item of legacyItems) {
+      if (!item.runId) item.runId = state.currentRunId;
+    }
+  }
   return state;
 }
 
@@ -369,6 +393,35 @@ function saveState(state) {
 function nextId(state, type) {
   state.counters[type] = (state.counters[type] || 0) + 1;
   return `${type}_${String(state.counters[type]).padStart(4, '0')}`;
+}
+
+function startRun(state) {
+  const runId = nextId(state, 'run');
+  state.currentRunId = runId;
+  state.done = false;
+  state.final = null;
+  return runId;
+}
+
+function currentRunId(state) {
+  return state.currentRunId || startRun(state);
+}
+
+function isCurrentRun(state, item) {
+  return item && item.runId === state.currentRunId;
+}
+
+function hasCurrentRunPendingWork(state) {
+  if (!state.currentRunId) return false;
+  return state.pendingTurns.some(turn => isCurrentRun(state, turn) && turn.status === 'pending')
+    || state.pendingHostActions.some(action => isCurrentRun(state, action) && action.status === 'pending');
+}
+
+function ensureRunForUserMessage(state) {
+  if (!state.currentRunId || state.done || !hasCurrentRunPendingWork(state)) {
+    return startRun(state);
+  }
+  return state.currentRunId;
 }
 
 function stripCodeFences(content) {
@@ -427,6 +480,7 @@ function extractHostActions(content, state, sender, metadata = {}) {
     actions.push({
       id: actionId,
       type: 'host_action',
+      runId: metadata.runId || currentRunId(state),
       requestedBy: parsed.requestedBy || parsed.requested_by || sender,
       kind: parsed.kind || 'unknown',
       reason: parsed.reason || '',
@@ -445,6 +499,7 @@ function extractHostActions(content, state, sender, metadata = {}) {
 function appendMessage(state, sender, content, metadata = {}) {
   const msg = {
     id: nextId(state, 'message'),
+    runId: metadata.runId || currentRunId(state),
     sender,
     content: String(content || '').trimEnd(),
     metadata,
@@ -460,7 +515,12 @@ function workflowNode(state, nodeId) {
 }
 
 function completedWorkflowNodes(state) {
-  return new Set(state.completedTurns.map(turn => turn.workflowNode).filter(Boolean));
+  return new Set(
+    state.completedTurns
+      .filter(turn => isCurrentRun(state, turn))
+      .map(turn => turn.workflowNode)
+      .filter(Boolean)
+  );
 }
 
 function nodePrereqsMet(state, nodeId) {
@@ -482,11 +542,57 @@ function nodesForMentionTargets(state, sourceNode, mentions) {
   return nextNodes.filter(nodeId => mentions.includes(agentForNode(state, nodeId)) && nodePrereqsMet(state, nodeId));
 }
 
+function allowedNextNodes(state, sourceNode) {
+  if (!sourceNode || !state.workflow.edges) return [];
+  return state.workflow.edges[sourceNode] || [];
+}
+
+function turnLimitReached(state) {
+  const limit = Number(state.world.turnLimit || 30);
+  if (!Number.isFinite(limit) || limit <= 0) return false;
+  const completed = state.completedTurns.filter(turn => isCurrentRun(state, turn)).length;
+  return completed >= limit;
+}
+
+function queueRoutingError(state, error) {
+  const runId = currentRunId(state);
+  const duplicate = state.pendingRoutingErrors.some(item => (
+    item.status === 'pending'
+    && item.runId === runId
+    && item.reason === error.reason
+    && item.sourceMessageId === error.sourceMessageId
+  ));
+  if (duplicate) return null;
+
+  const blocked = {
+    id: nextId(state, 'blocked'),
+    type: 'blocked',
+    runId,
+    status: 'pending',
+    createdAt: now(),
+    ...error
+  };
+  state.pendingRoutingErrors.push(blocked);
+  return blocked;
+}
+
 function queueTurn(state, agent, sourceMessageId, reason = 'mention', workflowNodeId = null) {
   if (!state.agents[agent]) return null;
   if (state.done) return null;
+  if (turnLimitReached(state)) {
+    const limit = Number(state.world.turnLimit || 30);
+    queueRoutingError(state, {
+      reason: `Workflow stopped: turn limit ${limit} reached.`,
+      code: 'turn_limit_reached',
+      sourceMessageId,
+      limit,
+      completedTurns: state.completedTurns.filter(turn => isCurrentRun(state, turn)).length
+    });
+    return null;
+  }
   const alreadyPending = state.pendingTurns.some(turn => (
     turn.status === 'pending' &&
+    turn.runId === state.currentRunId &&
     turn.agent === agent &&
     (turn.workflowNode || null) === (workflowNodeId || null)
   ));
@@ -494,6 +600,7 @@ function queueTurn(state, agent, sourceMessageId, reason = 'mention', workflowNo
   const turn = {
     id: nextId(state, 'turn'),
     type: 'agent_turn',
+    runId: currentRunId(state),
     agent,
     workflowNode: workflowNodeId,
     sourceMessageId,
@@ -522,7 +629,7 @@ function processMessageForRouting(state, msg) {
   }
 
   const isAgent = Boolean(state.agents[msg.sender]);
-  const hostActions = isAgent ? extractHostActions(msg.content, state, msg.sender, msg.metadata) : [];
+  const hostActions = isAgent ? extractHostActions(msg.content, state, msg.sender, { ...(msg.metadata || {}), runId: msg.runId }) : [];
   if (hostActions.length > 0) {
     state.pendingHostActions.push(...hostActions);
     return;
@@ -534,7 +641,11 @@ function processMessageForRouting(state, msg) {
     if (mentions.length > 0 && state.workflow.nodes) {
       const humanEdges = state.workflow.edges && state.workflow.edges.human;
       const candidates = Object.entries(state.workflow.nodes)
-        .filter(([nodeId, node]) => mentions.includes(node.agent) && (!Array.isArray(humanEdges) || humanEdges.includes(nodeId)))
+        .filter(([nodeId, node]) => mentions.includes(node.agent))
+        .filter(([nodeId]) => {
+          if (Array.isArray(humanEdges)) return humanEdges.includes(nodeId);
+          return nodeId === state.workflow.entry || nodePrereqsMet(state, nodeId);
+        })
         .map(([nodeId]) => nodeId);
       if (candidates.length > 0) {
         for (const nodeId of candidates) queueWorkflowNode(state, nodeId, msg.id, 'human_mention_workflow_node');
@@ -558,7 +669,32 @@ function processMessageForRouting(state, msg) {
       return;
     }
 
-    if (state.workflow.enforceEdges && currentNode) return;
+    if (state.workflow.enforceEdges && currentNode) {
+      const allowedNext = allowedNextNodes(state, currentNode);
+      const invalidMentions = mentions.filter(target => !allowedNext.some(nodeId => agentForNode(state, nodeId) === target));
+      if (invalidMentions.length > 0) {
+        const invalidTargets = invalidMentions.map(target => ({
+          agent: target,
+          nodes: Object.entries(state.workflow.nodes || {})
+            .filter(([, node]) => node.agent === target)
+            .map(([nodeId]) => nodeId)
+        }));
+        const invalidTargetText = invalidTargets
+          .map(target => target.nodes.length > 0 ? target.nodes.join(', ') : `@${target.agent}`)
+          .join(', ');
+        queueRoutingError(state, {
+          reason: `Agent @${msg.sender} mentioned ${invalidMentions.map(target => `@${target}`).join(', ')}, but no workflow edge allows ${currentNode} -> ${invalidTargetText}.`,
+          code: 'workflow_edge_blocked',
+          sourceMessageId: msg.id,
+          sourceAgent: msg.sender,
+          sourceNode: currentNode,
+          mentions: invalidMentions,
+          targetNodes: invalidTargets,
+          allowedNext
+        });
+      }
+      return;
+    }
 
     for (const target of mentions) {
       if (target !== msg.sender) queueTurn(state, target, msg.id, 'agent_mention');
@@ -574,8 +710,9 @@ function processMessageForRouting(state, msg) {
 }
 
 function compactContext(state, limit = 18) {
-  return state.messages.slice(-limit).map(message => ({
+  return state.messages.filter(message => isCurrentRun(state, message)).slice(-limit).map(message => ({
     id: message.id,
+    runId: message.runId,
     sender: message.sender,
     content: message.content,
     metadata: message.metadata || {}
@@ -644,6 +781,7 @@ Now produce ONLY @${agent.name}'s next message. Do not explain the protocol. Do 
   return {
     type: 'agent_instruction',
     world: state.world.name,
+    runId: turn.runId,
     turnId: turn.id,
     agent: agent.name,
     role: agent.role,
@@ -673,6 +811,7 @@ function buildHostActionInstruction(state, action) {
   return {
     type: 'host_action',
     world: state.world.name,
+    runId: action.runId,
     actionId: action.id,
     requestedBy: action.requestedBy,
     workflowNode: action.workflowNode,
@@ -695,25 +834,61 @@ function buildHostActionInstruction(state, action) {
   };
 }
 
+function buildBlockedInstruction(state, blocked) {
+  return {
+    type: 'blocked',
+    world: state.world.name,
+    runId: blocked.runId,
+    reason: blocked.reason,
+    code: blocked.code || 'routing_blocked',
+    sourceAgent: blocked.sourceAgent || null,
+    sourceNode: blocked.sourceNode || null,
+    mentions: blocked.mentions || [],
+    targetNodes: blocked.targetNodes || [],
+    allowedNext: blocked.allowedNext || [],
+    limit: blocked.limit,
+    completedTurns: blocked.completedTurns,
+    hostInstruction: 'Report this routing block to the user. Do not continue the Agent World loop until the user gives a new top-level request or fixes the workflow.'
+  };
+}
+
 function nextInstruction(state) {
   if (state.done) {
     return {
       type: 'done',
       world: state.world.name,
+      runId: state.currentRunId,
       final: state.final,
       hostInstruction: 'Return the final answer to the user. Do not continue the Agent World loop.'
     };
   }
 
-  const pendingAction = state.pendingHostActions.find(action => action.status === 'pending');
+  const pendingBlocked = state.pendingRoutingErrors.find(error => isCurrentRun(state, error) && error.status === 'pending');
+  if (pendingBlocked) return buildBlockedInstruction(state, pendingBlocked);
+
+  const pendingAction = state.pendingHostActions.find(action => isCurrentRun(state, action) && action.status === 'pending');
   if (pendingAction) return buildHostActionInstruction(state, pendingAction);
 
-  const pendingTurn = state.pendingTurns.find(turn => turn.status === 'pending');
+  const pendingTurn = state.pendingTurns.find(turn => isCurrentRun(state, turn) && turn.status === 'pending');
+  if (pendingTurn && turnLimitReached(state)) {
+    pendingTurn.status = 'blocked';
+    pendingTurn.blockedAt = now();
+    const limit = Number(state.world.turnLimit || 30);
+    const blocked = queueRoutingError(state, {
+      reason: `Workflow stopped: turn limit ${limit} reached.`,
+      code: 'turn_limit_reached',
+      sourceMessageId: pendingTurn.sourceMessageId,
+      limit,
+      completedTurns: state.completedTurns.filter(turn => isCurrentRun(state, turn)).length
+    });
+    return buildBlockedInstruction(state, blocked || state.pendingRoutingErrors.find(error => isCurrentRun(state, error) && error.status === 'pending'));
+  }
   if (pendingTurn) return buildAgentInstruction(state, pendingTurn);
 
   return {
     type: 'idle',
     world: state.world.name,
+    runId: state.currentRunId,
     hostInstruction: 'No pending Agent World work. You may ask for the next request.'
   };
 }
@@ -722,11 +897,12 @@ function completeTurn(state, turnId, content) {
   const turn = state.pendingTurns.find(item => item.id === turnId);
   if (!turn) throw new Error(`Unknown turn: ${turnId}`);
   if (turn.status !== 'pending') throw new Error(`Turn is not pending: ${turnId}`);
+  state.currentRunId = turn.runId;
   turn.status = 'completed';
   turn.completedAt = now();
   state.completedTurns.push({ ...turn });
 
-  const msg = appendMessage(state, turn.agent, content, { turnId, workflowNode: turn.workflowNode || null });
+  const msg = appendMessage(state, turn.agent, content, { runId: turn.runId, turnId, workflowNode: turn.workflowNode || null });
   processMessageForRouting(state, msg);
   return msg;
 }
@@ -735,6 +911,7 @@ function completeAction(state, actionId, content) {
   const action = state.pendingHostActions.find(item => item.id === actionId);
   if (!action) throw new Error(`Unknown action: ${actionId}`);
   if (action.status !== 'pending') throw new Error(`Action is not pending: ${actionId}`);
+  state.currentRunId = action.runId;
   action.status = 'completed';
   action.completedAt = now();
   state.completedHostActions.push({ ...action });
@@ -744,6 +921,7 @@ function completeAction(state, actionId, content) {
 
   const hostMessage = `@${action.requestedBy}\n[HOST_ACTION_RESULT ${action.id}]\n${resultText}`;
   const msg = appendMessage(state, 'host', hostMessage, {
+    runId: action.runId,
     actionId,
     replyTo: action.requestedBy,
     workflowNode: action.workflowNode || null
@@ -815,6 +993,7 @@ async function main() {
   if (cmd === 'user' || cmd === 'ingest') {
     const content = args.stdin ? await readStdin() : args.message || args.m || '';
     if (!String(content).trim()) throw new Error('No user message provided. Use --stdin or --message.');
+    ensureRunForUserMessage(state);
     const msg = appendMessage(state, 'human', content);
     processMessageForRouting(state, msg);
     saveState(state);
@@ -856,6 +1035,7 @@ async function main() {
       world: state.world.name,
       messages: state.messages.map(message => ({
         id: message.id,
+        runId: message.runId,
         sender: message.sender,
         content: message.content,
         metadata: message.metadata
