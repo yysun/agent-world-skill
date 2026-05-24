@@ -30,6 +30,8 @@ The agents do not directly run shell commands or edit files. They request host a
 - `SKILL.md`: instructions for Codex when it acts as the Agent World host executor.
 - `scripts/agent-world-router.js`: the router that loads the world, tracks state, and returns the next instruction.
 - `agent-world.example.yaml`: a sample world definition with product, architecture, implementation, QA, and security agents.
+- `init-agent-world.md`: the setup process for creating a new `agent-world.yaml` from a selected messaging pattern.
+- `messaging-patterns.md`: the supported workflow patterns for new worlds.
 - `mention-routing-rules.md`: the standalone mention-routing rule reference.
 - `tests/agent-world-router.test.js`: router tests.
 
@@ -104,9 +106,15 @@ The router owns all of this. Agents should mention the intended next target, but
 
 1. Install this skill in an agent app, such as Codex.
 
-2. Create an `agent-world.yaml` file in your project.
+2. Ask Codex to create a world in your project:
 
-   You can start by copying `agent-world.example.yaml` and editing the agents, prompts, and workflow.
+   ```text
+   create agent world
+   ```
+
+   Codex should ask which messaging workflow you want, using `messaging-patterns.md` as the source list. After you choose, it writes `agent-world.yaml` in the current working directory with sample agents and a matching workflow.
+
+   If `agent-world.yaml` already exists, Codex must ask before overwriting it.
 
 3. Ask the agent app for the work you want:
 
@@ -115,6 +123,29 @@ The router owns all of this. Agents should mention the intended next target, but
    ```
 
 The skill should route the request through the router script. Codex will then run the first selected agent, send that agent's response back to the router, and continue through the workflow.
+
+You can still start manually by copying `agent-world.example.yaml` and editing the agents, prompts, and workflow yourself. The init flow is the safer default because it forces the workflow choice up front.
+
+## Creating A World
+
+Creation is separate from execution. When the user says something like `create agent world`, `init agent-world`, or `set up agent-world.yaml`, Codex should follow `init-agent-world.md` instead of starting the router loop.
+
+The init process:
+
+1. Checks whether `agent-world.yaml` already exists in the current working directory.
+2. Asks for overwrite confirmation if the file exists.
+3. Asks the user to choose one workflow pattern:
+   - Broadcast
+   - Direct handoff
+   - Multi-agent fan-out
+   - Fan-in / collector
+   - Sequential pipeline
+   - Intent router
+   - FSM / state-token workflow
+   - Debate / ping-pong loop
+   - Orchestrator-worker
+4. Writes a valid `agent-world.yaml` with sample agents, prompts, edges, and stop behavior for the selected pattern.
+5. Stops after creation unless the user also asks to run the world.
 
 ## The Short Version
 
