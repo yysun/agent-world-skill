@@ -290,6 +290,53 @@ function normalizeWorkflow(parsed, agents) {
   return workflow;
 }
 
+function validateConfig(config) {
+  const errors = [];
+  const agents = config.agents || {};
+  const workflow = config.workflow || {};
+  const nodes = workflow.nodes || {};
+  const edges = workflow.edges || {};
+
+  if (workflow.entry && !nodes[workflow.entry]) {
+    errors.push(`workflow.entry "${workflow.entry}" does not match a workflow node`);
+  }
+
+  for (const [nodeId, node] of Object.entries(nodes)) {
+    if (!node || !node.agent) {
+      errors.push(`workflow.nodes.${nodeId} is missing agent`);
+      continue;
+    }
+
+    if (!agents[node.agent]) {
+      errors.push(`workflow.nodes.${nodeId}.agent "${node.agent}" is not defined in agents`);
+    }
+
+    for (const requiredNode of asArray(node.requires)) {
+      if (!nodes[requiredNode]) {
+        errors.push(`workflow.nodes.${nodeId}.requires references missing node "${requiredNode}"`);
+      }
+    }
+  }
+
+  for (const [fromNode, toNodes] of Object.entries(edges)) {
+    if (fromNode !== 'human' && !nodes[fromNode]) {
+      errors.push(`workflow.edges.${fromNode} references missing source node "${fromNode}"`);
+    }
+
+    for (const toNode of asArray(toNodes)) {
+      if (!nodes[toNode]) {
+        errors.push(`workflow.edges.${fromNode} references missing target node "${toNode}"`);
+      }
+    }
+  }
+
+  if (errors.length > 0) {
+    throw new Error(`Invalid Agent World config:\n- ${errors.join('\n- ')}`);
+  }
+
+  return config;
+}
+
 function loadConfig(configPath = DEFAULT_CONFIG_PATH) {
   if (!fs.existsSync(configPath)) {
     throw new Error(`Missing Agent World config: ${configPath}`);
@@ -313,12 +360,12 @@ function loadConfig(configPath = DEFAULT_CONFIG_PATH) {
   world.entryAgent = workflow.entryAgent;
   if (parsed.routing && parsed.routing.stopToken) world.stopToken = parsed.routing.stopToken;
 
-  return {
+  return validateConfig({
     configPath,
     world,
     workflow,
     agents
-  };
+  });
 }
 
 function newState(config) {
@@ -1144,7 +1191,15 @@ async function main() {
   throw new Error(`Unknown command: ${cmd}`);
 }
 
-main().catch(err => {
-  console.error(JSON.stringify({ type: 'error', error: err.message, stack: err.stack }, null, 2));
-  process.exit(1);
-});
+if (require.main === module) {
+  main().catch(err => {
+    console.error(JSON.stringify({ type: 'error', error: err.message, stack: err.stack }, null, 2));
+    process.exit(1);
+  });
+}
+
+module.exports = {
+  parseYaml,
+  loadConfig,
+  validateConfig
+};

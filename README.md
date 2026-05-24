@@ -55,12 +55,15 @@ Example flow:
 
 When an agent needs real work, like file edits or tests, it does not do that work directly. It emits a host action request. The router returns `host_action`, Codex performs the approved work using normal tools, and the result goes back into the router.
 
-The router can return four result types:
+The router can return five result types:
 
 - `agent_instruction`: Codex should run one turn as the selected agent.
 - `host_action`: Codex may perform real host work requested by an agent.
+- `blocked`: the workflow cannot continue without user or config intervention.
 - `done`: Codex should return the final answer to the human.
 - `idle`: nothing is waiting.
+
+`blocked` is deliberate. It is what happens when the router refuses to guess, for example after an off-edge handoff, a turn-limit stop, or invalid routing state. The host should report the block and stop the loop instead of choosing a fallback agent.
 
 The important rule: Codex does not pick the next agent. Codex always sends the latest message to the router and follows the one instruction the router returns.
 

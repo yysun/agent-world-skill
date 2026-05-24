@@ -108,6 +108,40 @@ function run(world, args, input = '') {
   return JSON.parse(result.stdout);
 }
 
+function runRaw(world, args, input = '') {
+  const env = {
+    ...process.env,
+    AGENT_WORLD_STATE: world.statePath
+  };
+  delete env.AGENT_WORLD_CONFIG;
+
+  return spawnSync(process.execPath, [router, ...args], {
+    cwd: world.cwd,
+    input,
+    env,
+    encoding: 'utf8'
+  });
+}
+
+function makeInvalidWorld(configYaml) {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'agent-world-invalid-config-test-'));
+  fs.writeFileSync(path.join(dir, 'agent-world.yaml'), configYaml);
+  return {
+    cwd: dir,
+    statePath: path.join(dir, '.state', 'router-state.json')
+  };
+}
+
+function assertInvalidConfig(configYaml, expectedMessage) {
+  const world = makeInvalidWorld(configYaml);
+  const result = runRaw(world, ['reset']);
+  assert.notEqual(result.status, 0, result.stdout);
+  const error = JSON.parse(result.stderr);
+  assert.equal(error.type, 'error');
+  assert.match(error.error, /Invalid Agent World config/);
+  assert.match(error.error, expectedMessage);
+}
+
 test('unit: loads agent-world.yaml from cwd and returns the configured entry agent', () => {
   const world = makeWorld();
 
@@ -376,4 +410,80 @@ test('regression: off-edge agent mentions return a blocked routing result', () =
   assert.deepEqual(blocked.mentions, ['dev']);
   assert.deepEqual(blocked.allowedNext, ['final']);
   assert.match(blocked.reason, /qa_review -> implementation/);
+});
+
+test('config validation: rejects missing entry node', () => {
+  assertInvalidConfig(`
+workflow:
+  entry: missing
+  nodes:
+    start:
+      agent: pm
+  edges:
+    start: []
+agents:
+  pm:
+    systemPrompt: PM
+`, /workflow\.entry "missing" does not match a workflow node/);
+});
+
+test('config validation: rejects missing node agent', () => {
+  assertInvalidConfig(`
+workflow:
+  entry: start
+  nodes:
+    start:
+      instruction: Missing agent.
+  edges:
+    start: []
+agents:
+  pm:
+    systemPrompt: PM
+`, /workflow\.nodes\.start is missing agent/);
+});
+
+test('config validation: rejects edge to missing node', () => {
+  assertInvalidConfig(`
+workflow:
+  entry: start
+  nodes:
+    start:
+      agent: pm
+  edges:
+    start: [missing]
+agents:
+  pm:
+    systemPrompt: PM
+`, /workflow\.edges\.start references missing target node "missing"/);
+});
+
+test('config validation: rejects node agent missing from agents', () => {
+  assertInvalidConfig(`
+workflow:
+  entry: start
+  nodes:
+    start:
+      agent: missing_agent
+  edges:
+    start: []
+agents:
+  pm:
+    systemPrompt: PM
+`, /workflow\.nodes\.start\.agent "missing_agent" is not defined in agents/);
+});
+
+test('config validation: rejects requires missing node', () => {
+  assertInvalidConfig(`
+workflow:
+  entry: final
+  nodes:
+    final:
+      agent: pm
+      requires: [missing]
+  edges:
+    final: []
+agents:
+  pm:
+    systemPrompt: PM
+`, /workflow\.nodes\.final\.requires references missing node "missing"/);
 });

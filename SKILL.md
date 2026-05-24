@@ -118,19 +118,26 @@ Suggested result:
 
 Return the router's `final` content. Stop.
 
+## `blocked`
+
+The router found a workflow problem it will not improvise around, such as an off-edge handoff, a turn-limit stop, or invalid routing state.
+
+Report the `reason` to the user and stop the Agent World loop. Do not pick a fallback agent, bypass the DAG, or continue until the user gives a new top-level request or fixes the workflow.
+
 ## `idle`
 
 No work is pending. Report that the Agent World workflow is idle.
 
 ## Driver Loop
 
-Repeat until `type` is `done` or `idle`:
+Repeat until `type` is `done`, `blocked`, or `idle`:
 
 1. Send the user message or previous completion to the router.
 2. Read the returned JSON.
 3. If `agent_instruction`, run exactly one agent turn and complete it.
 4. If `host_action`, execute the host action and complete it.
-5. If `done`, return the final content.
+5. If `blocked`, report the block and stop.
+6. If `done`, return the final content.
 
 ## Reset
 
