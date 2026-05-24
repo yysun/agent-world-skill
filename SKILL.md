@@ -36,7 +36,12 @@ ROUTER="scripts/agent-world-router.js"
 WORLD="agent-world.yaml"
 ```
 
-Run router commands with the project/world cwd preserved. Resolve `ROUTER` relative to this skill folder; the router reads `agent-world.yaml` from the process cwd unless `AGENT_WORLD_CONFIG` is set. Do not copy or generate a `scripts/` folder into the project cwd.
+These paths have different bases:
+
+- `ROUTER` is skill-relative. Resolve `scripts/agent-world-router.js` against the directory containing this `SKILL.md`.
+- `WORLD` is project-relative. Resolve `agent-world.yaml` against the current working directory for the user's project/world.
+
+Run router commands from the project/world cwd so the router finds `WORLD` at `./agent-world.yaml`. If the world file is elsewhere, set `AGENT_WORLD_CONFIG` to that project-relative or absolute path. Do not copy or generate a `scripts/` folder into the project cwd.
 
 ## Start Or Continue
 

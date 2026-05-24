@@ -776,11 +776,12 @@ State path:
   ${DEFAULT_STATE_PATH}
 
 Host loop:
-  1. ROUTER="scripts/agent-world-router.js"
-  2. printf '%s' "$USER_MESSAGE" | node "$ROUTER" user --stdin
-  3. Execute exactly one returned agent_instruction as the host executor.
-  4. Pipe the response to complete --turn <id> --stdin.
-  5. Repeat until type=done.
+  1. Resolve ROUTER relative to the skill folder: scripts/agent-world-router.js
+  2. Run from the project/world cwd containing agent-world.yaml
+  3. printf '%s' "$USER_MESSAGE" | node "$ROUTER" user --stdin
+  4. Execute exactly one returned agent_instruction as the host executor.
+  5. Pipe the response to complete --turn <id> --stdin.
+  6. Repeat until type=done.
 `);
 }
 
