@@ -30,6 +30,7 @@ The agents do not directly run shell commands or edit files. They request host a
 - `SKILL.md`: instructions for Codex when it acts as the Agent World host executor.
 - `scripts/agent-world-router.js`: the router that loads the world, tracks state, and returns the next instruction.
 - `agent-world.example.yaml`: a sample world definition with product, architecture, implementation, QA, and security agents.
+- `mention-routing-rules.md`: the standalone mention-routing rule reference.
 - `tests/agent-world-router.test.js`: router tests.
 
 ## How It Works
@@ -66,6 +67,38 @@ The router can return five result types:
 `blocked` is deliberate. It is what happens when the router refuses to guess, for example after an off-edge handoff, a turn-limit stop, or invalid routing state. The host should report the block and stop the loop instead of choosing a fallback agent.
 
 The important rule: Codex does not pick the next agent. Codex always sends the latest message to the router and follows the one instruction the router returns.
+
+## Mention Routing Rules
+
+`@mentions` are routing signals, not free-form agent summons. The router parses them, normalizes them to configured agent ids, and then checks the workflow DAG before queueing any turn.
+
+The practical rules:
+
+- Only paragraph-beginning mentions route. Mid-text mentions are conversation context only.
+- Mentions inside fenced code blocks do not route.
+- Leading whitespace is ignored.
+- Optional greeting prefixes before the mention are accepted: `hey`, `hi`, `hello`, and `to`.
+- Matching is case-insensitive after normalization. Spaces and most punctuation collapse to hyphens, so `@Review Captain`, `@review_captain`, and `@Review-Captain` can resolve to the same configured agent.
+- Display-name mentions can include a second TitleCase word, such as `@Madame Pedagogue`.
+- Multi-target fan-out is line-oriented: put each target mention at the start of its own line or paragraph.
+- Self-mentions are removed from agent-authored routing targets.
+
+Mentions still have to fit the workflow:
+
+- A human message with no paragraph-beginning mention enters `workflow.entry`, unless `world.mainAgent` is configured.
+- If `world.mainAgent` is configured, a human no-mention message is treated like an implicit mention of that agent.
+- If `workflow.edges.human` is configured, human mentions can only enter listed nodes.
+- Agent-authored mentions route only across allowed `workflow.edges` from the current node.
+- Nodes with `requires` do not run until their prerequisites are complete.
+- With `workflow.enforceEdges: true`, an off-edge mention returns `blocked` instead of falling back to another agent.
+- With `workflow.enforceEdges: false`, off-DAG agent mentions may fall back to direct agent routing.
+
+World tags refine routing:
+
+- `<world>TO:a,b</world>` replaces leading paragraph mentions with explicit normalized recipients.
+- `<world>STOP</world>`, `<world>DONE</world>`, `<world>PASS</world>`, and the configured `world.stopToken` complete the run and suppress further routing.
+
+The router owns all of this. Agents should mention the intended next target, but the YAML workflow decides whether that target can actually run.
 
 ## Quick Start
 

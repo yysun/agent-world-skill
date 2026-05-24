@@ -23,5 +23,7 @@
 
 - Existing DAG routing tests continue to pass.
 - New unit coverage proves normalized mention parsing, display-name mentions, main-agent fallback, world `TO`, self-mention removal, and completion tags.
+- New E2E coverage exercises mention routing through the router CLI across at least 20 executable cases.
+- E2E coverage includes normalized human mentions, agent handoffs, host-action precedence, `world.mainAgent`, `<world>TO:a,b</world>`, completion tags, join prerequisites, and off-edge blocks.
 - Off-edge targets remain blocked when `workflow.enforceEdges` is enabled.
 - `mention-routing-rules.md` is restored to the intended rule source rather than rewritten as an implementation note.
