@@ -5,6 +5,10 @@
   The router is deliberately not an agent executor. It loads agents and the
   workflow graph from agent-world.yaml, persists messages, parses handoff
   mentions / host actions, and returns the next instruction for the host executor.
+
+  Recent changes:
+  - Mention parsing now normalizes documented @mention forms before DAG routing.
+  - World TO / completion tags and mainAgent fallback feed the same workflow checks.
 */
 
 const fs = require('fs');
@@ -428,20 +432,85 @@ function stripCodeFences(content) {
   return String(content || '').replace(/```[\s\S]*?```/g, '');
 }
 
-function agentNames(state) {
-  return new Set(Object.keys(state.agents));
+function normalizeMentionLabel(value) {
+  return String(value || '')
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/^-+|-+$/g, '');
 }
 
-function extractParagraphMentions(content, state) {
-  const names = agentNames(state);
+function agentMentionAliases(state) {
+  const aliases = new Map();
+  for (const [id, agent] of Object.entries(state.agents || {})) {
+    const idAlias = normalizeMentionLabel(id);
+    if (idAlias) aliases.set(idAlias, id);
+
+    const nameAlias = normalizeMentionLabel(agent.name);
+    if (nameAlias && !aliases.has(nameAlias)) aliases.set(nameAlias, id);
+  }
+  return aliases;
+}
+
+function resolveMentionTarget(state, rawTarget) {
+  const alias = normalizeMentionLabel(rawTarget);
+  if (!alias) return null;
+  return agentMentionAliases(state).get(alias) || null;
+}
+
+function extractMentionLabelFromLine(line) {
+  let rest = String(line || '').trimStart();
+  const greeting = rest.match(/^(hey|hi|hello|to)\b[\s,:-]+/i);
+  if (greeting) rest = rest.slice(greeting[0].length);
+
+  const mention = rest.match(/^@([A-Za-z][A-Za-z0-9_.-]*)(?:[ \t]+([A-Z][A-Za-z0-9_.-]*))?/);
+  if (!mention) return null;
+  return [mention[1], mention[2]].filter(Boolean).join(' ');
+}
+
+function extractWorldToMentions(content, state) {
+  const match = String(content || '').match(/<world>\s*TO\s*:\s*([^<]+?)\s*<\/world>/i);
+  if (!match) return [];
+
+  const mentions = [];
+  const seen = new Set();
+  for (const rawTarget of match[1].split(',')) {
+    const target = resolveMentionTarget(state, rawTarget);
+    if (target && !seen.has(target)) {
+      seen.add(target);
+      mentions.push(target);
+    }
+  }
+  return mentions;
+}
+
+function hasWorldCompletionTag(content, state) {
+  const text = String(content || '');
+  if (state.world.stopToken && text.includes(state.world.stopToken)) return true;
+  return /<world>\s*(STOP|DONE|PASS)\s*<\/world>/i.test(text);
+}
+
+function stripLeadingMentionLines(content, state) {
+  return String(content || '')
+    .split(/\r?\n/)
+    .filter(line => !resolveMentionTarget(state, extractMentionLabelFromLine(line)))
+    .join('\n')
+    .replace(/^\s+/, '')
+    .trimEnd();
+}
+
+function extractParagraphMentions(content, state, sender = null) {
+  const toMentions = extractWorldToMentions(content, state);
+  if (toMentions.length > 0) return toMentions.filter(target => target !== sender);
+
   const text = stripCodeFences(content);
   const mentions = [];
   const seen = new Set();
   for (const line of text.split(/\r?\n/)) {
-    const match = line.match(/^\s*@([A-Za-z][A-Za-z0-9_-]*)\b/);
-    if (match && names.has(match[1]) && !seen.has(match[1])) {
-      seen.add(match[1]);
-      mentions.push(match[1]);
+    const target = resolveMentionTarget(state, extractMentionLabelFromLine(line));
+    if (target && target !== sender && !seen.has(target)) {
+      seen.add(target);
+      mentions.push(target);
     }
   }
   return mentions;
@@ -618,13 +687,26 @@ function queueWorkflowNode(state, nodeId, sourceMessageId, reason) {
   return queueTurn(state, agent, sourceMessageId, reason, nodeId);
 }
 
+function autoReplyMentionTarget(state, msg) {
+  const sourceMessageId = msg.metadata && msg.metadata.sourceMessageId;
+  const sourceMessage = sourceMessageId ? messageById(state, sourceMessageId) : null;
+  if (!sourceMessage || sourceMessage.sender === msg.sender) return null;
+  if (!state.agents[sourceMessage.sender]) return null;
+
+  const currentNode = msg.metadata && msg.metadata.workflowNode;
+  if (!currentNode || state.workflow.enforceEdges === false) return sourceMessage.sender;
+  return nodesForMentionTargets(state, currentNode, [sourceMessage.sender]).length > 0
+    ? sourceMessage.sender
+    : null;
+}
+
 function processMessageForRouting(state, msg) {
   if (msg.processedForRouting) return;
   msg.processedForRouting = true;
 
-  if (msg.content.includes(state.world.stopToken)) {
+  if (hasWorldCompletionTag(msg.content, state)) {
     state.done = true;
-    state.final = msg.content;
+    state.final = stripLeadingMentionLines(msg.content, state);
     return;
   }
 
@@ -635,9 +717,14 @@ function processMessageForRouting(state, msg) {
     return;
   }
 
-  const mentions = extractParagraphMentions(msg.content, state);
+  let mentions = extractParagraphMentions(msg.content, state, isAgent ? msg.sender : null);
 
   if (msg.sender === 'human') {
+    if (mentions.length === 0 && state.world.mainAgent) {
+      const mainAgent = resolveMentionTarget(state, state.world.mainAgent);
+      if (mainAgent) mentions = [mainAgent];
+    }
+
     if (mentions.length > 0 && state.workflow.nodes) {
       const humanEdges = state.workflow.edges && state.workflow.edges.human;
       const candidates = Object.entries(state.workflow.nodes)
@@ -662,6 +749,11 @@ function processMessageForRouting(state, msg) {
   }
 
   if (isAgent) {
+    if (mentions.length === 0) {
+      const replyTarget = autoReplyMentionTarget(state, msg);
+      if (replyTarget) mentions = [replyTarget];
+    }
+
     const currentNode = msg.metadata && msg.metadata.workflowNode;
     const routedNodes = nodesForMentionTargets(state, currentNode, mentions);
     if (routedNodes.length > 0) {
@@ -902,7 +994,12 @@ function completeTurn(state, turnId, content) {
   turn.completedAt = now();
   state.completedTurns.push({ ...turn });
 
-  const msg = appendMessage(state, turn.agent, content, { runId: turn.runId, turnId, workflowNode: turn.workflowNode || null });
+  const msg = appendMessage(state, turn.agent, content, {
+    runId: turn.runId,
+    turnId,
+    sourceMessageId: turn.sourceMessageId,
+    workflowNode: turn.workflowNode || null
+  });
   processMessageForRouting(state, msg);
   return msg;
 }

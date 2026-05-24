@@ -1,3 +1,11 @@
+/*
+  Router test coverage for Agent World.
+
+  Recent changes:
+  - Added coverage for documented @mention normalization and world tags.
+  - DAG edge enforcement remains the compatibility boundary for routed mentions.
+*/
+
 const assert = require('node:assert/strict');
 const { spawnSync } = require('node:child_process');
 const fs = require('node:fs');
@@ -17,6 +25,7 @@ world:
   name: test-world
   stopToken: "<world>pass</world>"
   turnLimit: ${turnLimit}
+${options.mainAgent ? `  mainAgent: ${options.mainAgent}\n` : ''}
 
 workflow:
   type: dag
@@ -45,7 +54,7 @@ workflow:
       instruction: Finish after both reviews.
   edges:
     requirements: [architecture]
-    architecture: [implementation]
+    architecture: ${options.architectureCanReturnToRequirements ? '[implementation, requirements]' : '[implementation]'}
     implementation: [qa_review, security_review]
     qa_review: [final]
     security_review: [final]
@@ -57,6 +66,7 @@ agents:
     systemPrompt: |
       You are @pm in the test world.
   architect:
+${options.displayNames ? '    name: Software Architect\n' : ''}
     role: software_architect
     systemPrompt: |
       You are @architect in the test world.
@@ -255,6 +265,84 @@ test('regression: human mention of duplicated agent does not use stale final pre
   assert.equal(output.type, 'agent_instruction');
   assert.equal(output.agent, 'pm');
   assert.equal(output.reason, 'human_mention_workflow_node');
+  assert.equal(output.workflow.node, 'requirements');
+});
+
+test('regression: normalized greeting and display-name mentions route through DAG edges', () => {
+  const world = makeWorld({ displayNames: true });
+
+  run(world, ['reset']);
+  run(world, ['user', '--stdin'], 'build an electron app');
+  const output = run(world, ['complete', '--turn', 'turn_0001', '--stdin'], `[STATE=requirements]
+
+@pm
+self mention should be ignored.
+
+hello @Software Architect
+Please design.`);
+
+  assert.equal(output.type, 'agent_instruction');
+  assert.equal(output.agent, 'Software Architect');
+  assert.equal(output.workflow.node, 'architecture');
+});
+
+test('regression: world mainAgent is used as a human no-mention fallback inside the DAG', () => {
+  const world = makeWorld({ mainAgent: 'architect' });
+
+  run(world, ['reset']);
+  const output = run(world, ['user', '--stdin'], 'please design directly');
+
+  assert.equal(output.type, 'agent_instruction');
+  assert.equal(output.agent, 'architect');
+  assert.equal(output.reason, 'human_mention_workflow_node');
+  assert.equal(output.workflow.node, 'architecture');
+});
+
+test('regression: world TO replaces leading mention targets and still fans out through DAG edges', () => {
+  const world = makeWorld();
+
+  run(world, ['reset']);
+  run(world, ['user', '--stdin'], 'build an electron app');
+  run(world, ['complete', '--turn', 'turn_0001', '--stdin'], '@architect\nPlease design.');
+  run(world, ['complete', '--turn', 'turn_0002', '--stdin'], '@dev\nPlease implement.');
+  const output = run(world, ['complete', '--turn', 'turn_0003', '--stdin'], `[STATE=implementation_ready]
+
+@dev
+ignore this self mention.
+
+<world>TO:QA,sec</world>
+Please review.`);
+
+  assert.equal(output.type, 'agent_instruction');
+  assert.equal(output.agent, 'qa');
+  assert.equal(output.workflow.node, 'qa_review');
+});
+
+test('regression: world completion tags suppress routing and strip leading mentions', () => {
+  const world = makeWorld();
+
+  run(world, ['reset']);
+  run(world, ['user', '--stdin'], 'build an electron app');
+  const output = run(world, ['complete', '--turn', 'turn_0001', '--stdin'], `@architect
+Do not route this handoff.
+
+Done. <world>DONE</world>`);
+
+  assert.equal(output.type, 'done');
+  assert.equal(output.final, 'Do not route this handoff.\n\nDone. <world>DONE</world>');
+});
+
+test('regression: auto-reply mentions route only when the DAG allows the source agent', () => {
+  const world = makeWorld({ architectureCanReturnToRequirements: true });
+
+  run(world, ['reset']);
+  run(world, ['user', '--stdin'], 'build an electron app');
+  run(world, ['complete', '--turn', 'turn_0001', '--stdin'], '@architect\nPlease design.');
+  const output = run(world, ['complete', '--turn', 'turn_0002', '--stdin'], 'I need clarification before design.');
+
+  assert.equal(output.type, 'agent_instruction');
+  assert.equal(output.agent, 'pm');
+  assert.equal(output.reason, 'workflow_edge');
   assert.equal(output.workflow.node, 'requirements');
 });
 
