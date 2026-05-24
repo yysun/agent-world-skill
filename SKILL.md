@@ -43,6 +43,12 @@ These paths have different bases:
 
 Run router commands from the project/world cwd so the router finds `WORLD` at `./agent-world.yaml`. If the world file is elsewhere, set `AGENT_WORLD_CONFIG` to that project-relative or absolute path. Do not copy or generate a `scripts/` folder into the project cwd.
 
+## Create Or Init Agent World
+
+When the user asks to create, initialize, init, scaffold, or set up an Agent World, do not start the router loop yet. Creation is a host setup task.
+
+Follow the skill-relative `init-agent-world.md` process. That process asks the user to choose a workflow from `messaging-patterns.md`, protects any existing `agent-world.yaml`, and writes the selected sample world into the current working directory.
+
 ## Start Or Continue
 
 For every Agent-World-scoped message, pipe the exact message to the router:
