@@ -51,13 +51,20 @@ Follow the skill-relative `init-agent-world.md` process. That process asks the u
 
 ## Start Or Continue
 
-For every Agent-World-scoped message, pipe the exact message to the router:
+For every Agent-World-scoped message, write the exact message to `request.json` and run the router in file mode:
 
-```bash
-printf '%s' "$USER_MESSAGE" | node "$ROUTER" user --stdin
+```json
+{
+  "command": "user",
+  "content": "the exact user message"
+}
 ```
 
-Read the JSON response and follow its `type`.
+```bash
+node "$ROUTER" file --request request.json --result result.json
+```
+
+Read the structured payload from `result.json` and follow its `type`. Treat stdout or the tool result as a brief status notification only. Do not parse the real router payload from stdout.
 
 ## `agent_instruction`
 
@@ -80,13 +87,23 @@ Rules:
 - Do not call tools during an agent turn.
 - If the agent needs filesystem, shell, web, Git, or other host work, emit an `agent-world-host-action` JSON block.
 - If the agent hands off with a paragraph-start mention such as `@architect`, stop after that handoff.
-- Immediately pipe the agent message back to the router:
+- Immediately write the agent message back to `request.json`:
 
-```bash
-printf '%s' "$AGENT_RESPONSE" | node "$ROUTER" complete --turn "$TURN_ID" --stdin
+```json
+{
+  "command": "complete",
+  "turnId": "turn_0001",
+  "content": "the exact agent response"
+}
 ```
 
-Then follow the next returned JSON instruction.
+Then run:
+
+```bash
+node "$ROUTER" file --request request.json --result result.json
+```
+
+Then read `result.json` and follow the next returned instruction.
 
 ## `host_action`
 
@@ -102,23 +119,25 @@ The router returns:
 
 Now the host executor may use native tools, if the action is safe and approved. Execute the requested host work honestly; do not invent success.
 
-After completion, pipe a concise JSON result back:
-
-```bash
-printf '%s' "$HOST_ACTION_RESULT_JSON" | node "$ROUTER" complete --action "$ACTION_ID" --stdin
-```
+After completion, write a concise JSON result back through `request.json`.
 
 Suggested result:
 
 ```json
 {
-  "status": "succeeded | failed | skipped | denied",
-  "summary": "what happened",
-  "artifacts": [],
-  "stdoutPreview": "",
-  "stderrPreview": ""
+  "command": "complete",
+  "actionId": "action_0001",
+  "content": {
+    "status": "succeeded | failed | skipped | denied",
+    "summary": "what happened",
+    "artifacts": [],
+    "stdoutPreview": "",
+    "stderrPreview": ""
+  }
 }
 ```
+
+Then run `node "$ROUTER" file --request request.json --result result.json` and read the next instruction from `result.json`.
 
 ## `done`
 
@@ -138,12 +157,13 @@ No work is pending. Report that the Agent World workflow is idle.
 
 Repeat until `type` is `done`, `blocked`, or `idle`:
 
-1. Send the user message or previous completion to the router.
-2. Read the returned JSON.
-3. If `agent_instruction`, run exactly one agent turn and complete it.
-4. If `host_action`, execute the host action and complete it.
-5. If `blocked`, report the block and stop.
-6. If `done`, return the final content.
+1. Write the user message or previous completion to `request.json`.
+2. Run `node "$ROUTER" file --request request.json --result result.json`.
+3. Read the returned JSON from `result.json`.
+4. If `agent_instruction`, run exactly one agent turn and complete it.
+5. If `host_action`, execute the host action and complete it.
+6. If `blocked`, report the block and stop.
+7. If `done`, return the final content.
 
 ## Reset
 

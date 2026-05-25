@@ -7,6 +7,7 @@
   mentions / host actions, and returns the next instruction for the host executor.
 
   Recent changes:
+  - Added file-based request/result handoff so stdout can stay status-only.
   - Mention parsing now normalizes documented @mention forms before DAG routing.
   - World TO / completion tags and mainAgent fallback feed the same workflow checks.
 */
@@ -17,6 +18,7 @@ const path = require('path');
 const ROUTER_COMMAND = 'node "$ROUTER"';
 const DEFAULT_STATE_PATH = process.env.AGENT_WORLD_STATE || path.join(process.cwd(), '.agent-world', 'agent-world-state.json');
 const DEFAULT_CONFIG_PATH = process.env.AGENT_WORLD_CONFIG || path.join(process.cwd(), 'agent-world.yaml');
+let activeStatePath = DEFAULT_STATE_PATH;
 
 function now() {
   return new Date().toISOString();
@@ -427,18 +429,18 @@ function hydrateState(state, config) {
 }
 
 function loadState(config) {
-  if (!fs.existsSync(DEFAULT_STATE_PATH)) {
+  if (!fs.existsSync(activeStatePath)) {
     const state = newState(config);
     saveState(state);
     return state;
   }
-  return hydrateState(JSON.parse(fs.readFileSync(DEFAULT_STATE_PATH, 'utf8')), config);
+  return hydrateState(JSON.parse(fs.readFileSync(activeStatePath, 'utf8')), config);
 }
 
 function saveState(state) {
   state.updatedAt = now();
-  ensureDir(DEFAULT_STATE_PATH);
-  fs.writeFileSync(DEFAULT_STATE_PATH, JSON.stringify(state, null, 2));
+  ensureDir(activeStatePath);
+  fs.writeFileSync(activeStatePath, JSON.stringify(state, null, 2));
 }
 
 function nextId(state, type) {
@@ -939,9 +941,15 @@ Now produce ONLY @${agent.name}'s next message. Do not explain the protocol. Do 
       doNot: [
         'do not answer the original user directly as the host executor',
         'do not run tools during an agent_instruction',
-        'do not skip the complete command'
+        'do not skip the file-based complete command',
+        'do not put the real completion payload on stdout'
       ],
-      completeByRunning: `${relativeCommandBase()} complete --turn ${turn.id} --stdin`
+      requestJson: {
+        command: 'complete',
+        turnId: turn.id,
+        content: `one markdown message as @${agent.name}`
+      },
+      completeByRunning: `${relativeCommandBase()} file --request request.json --result result.json`
     }
   };
 }
@@ -968,7 +976,18 @@ function buildHostActionInstruction(state, action) {
         stdoutPreview: '',
         stderrPreview: ''
       },
-      completeByRunning: `${relativeCommandBase()} complete --action ${action.id} --stdin`
+      requestJson: {
+        command: 'complete',
+        actionId: action.id,
+        content: {
+          status: 'succeeded | failed | skipped | denied',
+          summary: 'what happened',
+          artifacts: [],
+          stdoutPreview: '',
+          stderrPreview: ''
+        }
+      },
+      completeByRunning: `${relativeCommandBase()} file --request request.json --result result.json`
     }
   };
 }
@@ -1078,10 +1097,131 @@ function printJson(obj) {
   process.stdout.write(JSON.stringify(obj, null, 2) + '\n');
 }
 
+function readJsonFile(filePath) {
+  return JSON.parse(fs.readFileSync(filePath, 'utf8'));
+}
+
+function writeJsonFile(filePath, obj) {
+  ensureDir(filePath);
+  fs.writeFileSync(filePath, JSON.stringify(obj, null, 2) + '\n');
+}
+
+function requestContent(request) {
+  const value = request.content !== undefined
+    ? request.content
+    : request.message !== undefined
+      ? request.message
+      : request.input !== undefined
+        ? request.input
+        : '';
+
+  return typeof value === 'string' ? value : JSON.stringify(value);
+}
+
+function executeRouterCommand(config, cmd, args = {}, content = '') {
+  if (cmd === 'reset') {
+    if (fs.existsSync(activeStatePath)) fs.rmSync(activeStatePath, { force: true });
+    const state = newState(config);
+    saveState(state);
+    return { type: 'reset', statePath: activeStatePath, configPath: config.configPath, next: nextInstruction(state) };
+  }
+
+  if (cmd === 'init') {
+    const state = loadState(config);
+    saveState(state);
+    return { type: 'ready', statePath: activeStatePath, configPath: config.configPath, world: state.world.name, next: nextInstruction(state) };
+  }
+
+  const state = loadState(config);
+
+  if (cmd === 'user' || cmd === 'ingest') {
+    if (!String(content).trim()) throw new Error('No user message provided.');
+    ensureRunForUserMessage(state);
+    const msg = appendMessage(state, 'human', content);
+    processMessageForRouting(state, msg);
+    saveState(state);
+    return nextInstruction(state);
+  }
+
+  if (cmd === 'next') {
+    saveState(state);
+    return nextInstruction(state);
+  }
+
+  if (cmd === 'complete') {
+    if (args.turn) {
+      completeTurn(state, args.turn, content);
+      saveState(state);
+      return nextInstruction(state);
+    }
+    if (args.action) {
+      completeAction(state, args.action, content);
+      saveState(state);
+      return nextInstruction(state);
+    }
+    throw new Error('complete requires turnId/turn or actionId/action.');
+  }
+
+  if (cmd === 'state') return state;
+
+  if (cmd === 'transcript') {
+    return {
+      type: 'transcript',
+      world: state.world.name,
+      messages: state.messages.map(message => ({
+        id: message.id,
+        runId: message.runId,
+        sender: message.sender,
+        content: message.content,
+        metadata: message.metadata
+      }))
+    };
+  }
+
+  throw new Error(`Unknown command: ${cmd}`);
+}
+
+function withStatePath(statePath, fn) {
+  const previous = activeStatePath;
+  activeStatePath = statePath || DEFAULT_STATE_PATH;
+  try {
+    return fn();
+  } finally {
+    activeStatePath = previous;
+  }
+}
+
+function runFileRequest(args) {
+  const requestPath = path.resolve(args.request || 'request.json');
+  const request = readJsonFile(requestPath);
+  const resultPath = path.resolve(args.result || request.resultPath || path.join(path.dirname(requestPath), 'result.json'));
+  const configPath = path.resolve(request.configPath || request.config || DEFAULT_CONFIG_PATH);
+  const statePath = path.resolve(request.statePath || request.state || DEFAULT_STATE_PATH);
+  const cmd = request.command || request.cmd;
+  if (!cmd) throw new Error('request.json is missing command.');
+
+  const result = withStatePath(statePath, () => {
+    const config = loadConfig(configPath);
+    return executeRouterCommand(config, cmd, {
+      turn: request.turnId || request.turn,
+      action: request.actionId || request.action
+    }, requestContent(request));
+  });
+
+  writeJsonFile(resultPath, result);
+  process.stdout.write(`agent-world-router: wrote ${path.basename(resultPath)}\n`);
+}
+
 function help(config) {
   console.log(`Agent World Router
 
 Commands:
+  file --request <path> --result <path>
+                               Read structured request JSON and write structured result JSON
+
+Compatibility commands below write structured JSON to stdout. Do not use them
+for the Agent World host handoff.
+
   init                         Create state if missing
   reset                        Delete state and create fresh state
   user --stdin                 Ingest a user message and return next instruction
@@ -1100,16 +1240,22 @@ State path:
 Host loop:
   1. Resolve ROUTER relative to the skill folder: scripts/agent-world-router.js
   2. Run from the project/world cwd containing agent-world.yaml
-  3. printf '%s' "$USER_MESSAGE" | node "$ROUTER" user --stdin
-  4. Execute exactly one returned agent_instruction as the host executor.
-  5. Pipe the response to complete --turn <id> --stdin.
-  6. Repeat until type=done.
+  3. Write request.json with command and content.
+  4. Run node "$ROUTER" file --request request.json --result result.json
+  5. Read result.json and execute exactly one returned instruction as the host executor.
+  6. Write the next request.json to complete the turn or host action.
+  7. Repeat until type=done.
 `);
 }
 
 async function main() {
   const args = parseArgs(process.argv.slice(2));
   const cmd = args._[0] || 'help';
+  if (cmd === 'file' || args.request) {
+    runFileRequest(args);
+    return;
+  }
+
   const config = loadConfig(args.config || DEFAULT_CONFIG_PATH);
 
   if (cmd === 'help' || cmd === '--help' || cmd === '-h') {
@@ -1118,73 +1264,39 @@ async function main() {
   }
 
   if (cmd === 'reset') {
-    if (fs.existsSync(DEFAULT_STATE_PATH)) fs.rmSync(DEFAULT_STATE_PATH, { force: true });
-    const state = newState(config);
-    saveState(state);
-    printJson({ type: 'reset', statePath: DEFAULT_STATE_PATH, configPath: config.configPath, next: nextInstruction(state) });
+    printJson(executeRouterCommand(config, cmd));
     return;
   }
 
   if (cmd === 'init') {
-    const state = loadState(config);
-    saveState(state);
-    printJson({ type: 'ready', statePath: DEFAULT_STATE_PATH, configPath: config.configPath, world: state.world.name, next: nextInstruction(state) });
+    printJson(executeRouterCommand(config, cmd));
     return;
   }
 
-  const state = loadState(config);
-
   if (cmd === 'user' || cmd === 'ingest') {
     const content = args.stdin ? await readStdin() : args.message || args.m || '';
-    if (!String(content).trim()) throw new Error('No user message provided. Use --stdin or --message.');
-    ensureRunForUserMessage(state);
-    const msg = appendMessage(state, 'human', content);
-    processMessageForRouting(state, msg);
-    saveState(state);
-    printJson(nextInstruction(state));
+    printJson(executeRouterCommand(config, cmd, args, content));
     return;
   }
 
   if (cmd === 'next') {
-    saveState(state);
-    printJson(nextInstruction(state));
+    printJson(executeRouterCommand(config, cmd));
     return;
   }
 
   if (cmd === 'complete') {
     const content = args.stdin ? await readStdin() : args.message || args.m || '';
-    if (args.turn) {
-      completeTurn(state, args.turn, content);
-      saveState(state);
-      printJson(nextInstruction(state));
-      return;
-    }
-    if (args.action) {
-      completeAction(state, args.action, content);
-      saveState(state);
-      printJson(nextInstruction(state));
-      return;
-    }
-    throw new Error('complete requires --turn <id> or --action <id>.');
+    printJson(executeRouterCommand(config, cmd, args, content));
+    return;
   }
 
   if (cmd === 'state') {
-    printJson(state);
+    printJson(executeRouterCommand(config, cmd));
     return;
   }
 
   if (cmd === 'transcript') {
-    printJson({
-      type: 'transcript',
-      world: state.world.name,
-      messages: state.messages.map(message => ({
-        id: message.id,
-        runId: message.runId,
-        sender: message.sender,
-        content: message.content,
-        metadata: message.metadata
-      }))
-    });
+    printJson(executeRouterCommand(config, cmd));
     return;
   }
 

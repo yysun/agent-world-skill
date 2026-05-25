@@ -70,6 +70,58 @@ The router can return five result types:
 
 The important rule: Codex does not pick the next agent. Codex always sends the latest message to the router and follows the one instruction the router returns.
 
+## File-Based Handoff
+
+The host loop uses files for the real payload:
+
+- `request.json`: structured router input.
+- `result.json`: structured router output.
+- stdout or the tool result: brief status notification only.
+- stderr and logs: human/debug output.
+
+Do not put the real handoff payload on stdout. That channel is too easy to pollute with logs and too visible for large protocol objects.
+
+Example user request:
+
+```json
+{
+  "command": "user",
+  "content": "Build an Electron app."
+}
+```
+
+Run:
+
+```bash
+node "$ROUTER" file --request request.json --result result.json
+```
+
+Then read `result.json` and follow its `type`.
+
+Example agent turn completion:
+
+```json
+{
+  "command": "complete",
+  "turnId": "turn_0001",
+  "content": "@architect\nPlease design the smallest workable version."
+}
+```
+
+Example host action completion:
+
+```json
+{
+  "command": "complete",
+  "actionId": "action_0001",
+  "content": {
+    "status": "succeeded",
+    "summary": "created files",
+    "artifacts": []
+  }
+}
+```
+
 ## Mention Routing Rules
 
 `@mentions` are routing signals, not free-form agent summons. The router parses them, normalizes them to configured agent ids, and then checks the workflow DAG before queueing any turn.

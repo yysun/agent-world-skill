@@ -2,6 +2,7 @@
   Router test coverage for Agent World.
 
   Recent changes:
+  - Added file-based request/result handoff coverage.
   - Added coverage for documented @mention normalization and world tags.
   - DAG edge enforcement remains the compatibility boundary for routed mentions.
 */
@@ -123,6 +124,34 @@ function runRaw(world, args, input = '') {
   });
 }
 
+function runFile(world, request, options = {}) {
+  const requestPath = path.join(world.cwd, options.requestName || 'request.json');
+  const resultPath = path.join(world.cwd, options.resultName || 'result.json');
+  fs.writeFileSync(requestPath, JSON.stringify({
+    configPath: path.join(world.cwd, 'agent-world.yaml'),
+    statePath: world.statePath,
+    resultPath,
+    ...request
+  }, null, 2));
+
+  const result = spawnSync(process.execPath, [router, 'file', '--request', requestPath], {
+    cwd: world.cwd,
+    env: {
+      ...process.env
+    },
+    encoding: 'utf8'
+  });
+
+  assert.equal(result.status, 0, result.stderr || result.stdout);
+  assert.match(result.stdout, /^agent-world-router: wrote result\.json\n$/);
+  assert.equal(result.stderr, '');
+  assert.ok(fs.existsSync(resultPath));
+  return {
+    stdout: result.stdout,
+    result: JSON.parse(fs.readFileSync(resultPath, 'utf8'))
+  };
+}
+
 function makeInvalidWorld(configYaml) {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'agent-world-invalid-config-test-'));
   fs.writeFileSync(path.join(dir, 'agent-world.yaml'), configYaml);
@@ -156,7 +185,85 @@ test('unit: loads agent-world.yaml from cwd and returns the configured entry age
   assert.equal(next.workflow.node, 'requirements');
   assert.deepEqual(next.workflow.next.map(item => item.node), ['architecture']);
   assert.match(next.systemPrompt, /@pm in the test world/);
-  assert.equal(next.responseContract.completeByRunning, 'node "$ROUTER" complete --turn turn_0001 --stdin');
+  assert.equal(next.responseContract.completeByRunning, 'node "$ROUTER" file --request request.json --result result.json');
+  assert.deepEqual(next.responseContract.requestJson, {
+    command: 'complete',
+    turnId: 'turn_0001',
+    content: 'one markdown message as @pm'
+  });
+});
+
+test('unit: file handoff writes user result to result.json and keeps stdout status-only', () => {
+  const world = makeWorld();
+
+  const output = runFile(world, {
+    command: 'user',
+    content: 'build an electron app'
+  });
+
+  assert.equal(output.result.type, 'agent_instruction');
+  assert.equal(output.result.agent, 'pm');
+  assert.equal(output.result.workflow.node, 'requirements');
+  assert.doesNotThrow(() => JSON.parse(fs.readFileSync(path.join(world.cwd, 'result.json'), 'utf8')));
+  assert.doesNotMatch(output.stdout, /"type"/);
+  assert.doesNotMatch(output.stdout, /agent_instruction/);
+});
+
+test('unit: file handoff completes turns and host actions through structured files', () => {
+  const world = makeWorld();
+
+  let output = runFile(world, {
+    command: 'user',
+    content: 'build an electron app'
+  }).result;
+
+  output = runFile(world, {
+    command: 'complete',
+    turnId: output.turnId,
+    content: '@architect\nPlease design.'
+  }).result;
+  assert.equal(output.type, 'agent_instruction');
+  assert.equal(output.agent, 'architect');
+
+  output = runFile(world, {
+    command: 'complete',
+    turnId: output.turnId,
+    content: '@dev\nPlease implement.'
+  }).result;
+  assert.equal(output.type, 'agent_instruction');
+  assert.equal(output.agent, 'dev');
+
+  output = runFile(world, {
+    command: 'complete',
+    turnId: output.turnId,
+    content: `Need host work.
+
+\`\`\`agent-world-host-action
+{
+  "kind": "shell",
+  "reason": "Check runtime",
+  "approval": "required",
+  "payload": {
+    "command": "node --version"
+  }
+}
+\`\`\``
+  }).result;
+  assert.equal(output.type, 'host_action');
+  assert.equal(output.kind, 'shell');
+
+  output = runFile(world, {
+    command: 'complete',
+    actionId: output.actionId,
+    content: {
+      status: 'succeeded',
+      summary: 'checked runtime'
+    }
+  }).result;
+
+  assert.equal(output.type, 'agent_instruction');
+  assert.equal(output.agent, 'dev');
+  assert.equal(output.reason, 'host_action_result');
 });
 
 test('targeted: routes through DAG and waits for both review lanes before final PM', () => {
