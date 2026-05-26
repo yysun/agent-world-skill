@@ -8,10 +8,10 @@ Agent World needs a cleaner boundary. Structured payloads belong in files. stdou
 
 ## Requirements
 
-- The router must support `request.json` as the structured input handoff.
-- The router must support `result.json` as the structured output handoff.
-- `request.json` must carry the real command payload, including command name, message content, turn id, action id, and optional config/state paths.
-- `result.json` must carry the same structured router result currently returned by stdout.
+- The router must support timestamped `.agent-world/request-<timestamp>.json` files as the structured input handoff.
+- The router must support timestamped `.agent-world/result-<timestamp>.json` files as the structured output handoff.
+- The request file must carry the real command payload, including command name, message content, turn id, action id, and optional config/state paths.
+- The result file must carry the same structured router result currently returned by stdout.
 - stdout must be a brief status notification only, not the real payload.
 - stderr must be reserved for errors and debug-facing output.
 - The skill instructions must tell the host executor to use the file-based contract, not stdin/stdout JSON.
@@ -20,8 +20,8 @@ Agent World needs a cleaner boundary. Structured payloads belong in files. stdou
 
 ## Acceptance Criteria
 
-- Tests prove a `user` request can be read from `request.json`, write a full `agent_instruction` to `result.json`, and keep stdout to a short status.
-- Tests prove a `complete --turn` request can be read from `request.json` and write the next instruction to `result.json`.
-- Tests prove a host-action result can be completed through `request.json` and `result.json`.
-- Router docs and skill instructions show `request.json` / `result.json` as the primary host loop.
+- Tests prove a `user` request can be read from a timestamped `.agent-world/request-*.json`, write a full `agent_instruction` to a timestamped `.agent-world/result-*.json`, and keep stdout to a short status.
+- Tests prove a `complete --turn` request can be read from a timestamped request file and write the next instruction to a timestamped result file.
+- Tests prove a host-action result can be completed through timestamped `.agent-world` request/result files.
+- Router docs and skill instructions show timestamped `.agent-world` request/result files as the primary host loop.
 - `node --test tests/agent-world-router.test.js tests/mention-routing.e2e.test.js` passes.

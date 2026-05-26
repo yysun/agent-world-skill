@@ -74,12 +74,12 @@ The important rule: Codex does not pick the next agent. Codex always sends the l
 
 The host loop uses files for the real payload:
 
-- `request.json`: structured router input.
-- `result.json`: structured router output.
+- `.agent-world/request-<timestamp>.json`: structured router input.
+- `.agent-world/result-<timestamp>.json`: structured router output.
 - stdout or the tool result: brief status notification only.
 - stderr and logs: human/debug output.
 
-Do not put the real handoff payload on stdout. That channel is too easy to pollute with logs and too visible for large protocol objects.
+Do not put the real handoff payload on stdout. That channel is too easy to pollute with logs and too visible for large protocol objects. Do not write handoff files at the project root; keep them under `./.agent-world/`.
 
 Example user request:
 
@@ -93,10 +93,10 @@ Example user request:
 Run:
 
 ```bash
-node "$ROUTER" file --request request.json --result result.json
+node "$ROUTER" file --request .agent-world/request-20260526T142233123Z-user.json --result .agent-world/result-20260526T142233123Z-user.json
 ```
 
-Then read `result.json` and follow its `type`.
+Then read the matching timestamped result file and follow its `type`.
 
 Example agent turn completion:
 

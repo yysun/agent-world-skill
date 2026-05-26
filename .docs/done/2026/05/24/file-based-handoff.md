@@ -2,7 +2,7 @@
 
 ## Summary
 
-- Added a router file mode that reads structured requests from `request.json` and writes full router results to `result.json`.
+- Added a router file mode that reads structured requests from timestamped `.agent-world/request-*.json` files and writes full router results to timestamped `.agent-world/result-*.json` files.
 - Kept stdout to a short status line in file mode, so logs or tool output no longer carry the real handoff payload.
 - Updated agent and host-action response contracts to point at the file-mode completion path.
 - Updated `SKILL.md` and `README.md` so the documented Agent World host loop uses file handoff instead of stdin/stdout JSON.

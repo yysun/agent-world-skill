@@ -894,6 +894,7 @@ function buildAgentInstruction(state, turn) {
   const context = compactContext(state);
   const routedFrom = messageById(state, turn.sourceMessageId);
   const workflow = workflowHints(state, turn);
+  const handoff = handoffFilePair(`turn-${turn.id}`);
   const promptForHost = `You are executing exactly one Agent World turn as @${agent.name}.
 
 The router selected @${agent.name} from agent-world.yaml. The router only provides this dynamic instruction: the selected agent's system prompt, workflow node, allowed next workflow nodes, and persisted context. Your job is to run that prompt once and produce @${agent.name}'s message.
@@ -949,12 +950,15 @@ Now produce ONLY @${agent.name}'s next message. Do not explain the protocol. Do 
         turnId: turn.id,
         content: `one markdown message as @${agent.name}`
       },
-      completeByRunning: `${relativeCommandBase()} file --request request.json --result result.json`
+      requestPath: handoff.requestPath,
+      resultPath: handoff.resultPath,
+      completeByRunning: `${relativeCommandBase()} file --request ${handoff.requestPath} --result ${handoff.resultPath}`
     }
   };
 }
 
 function buildHostActionInstruction(state, action) {
+  const handoff = handoffFilePair(`action-${action.id}`);
   return {
     type: 'host_action',
     world: state.world.name,
@@ -987,7 +991,9 @@ function buildHostActionInstruction(state, action) {
           stderrPreview: ''
         }
       },
-      completeByRunning: `${relativeCommandBase()} file --request request.json --result result.json`
+      requestPath: handoff.requestPath,
+      resultPath: handoff.resultPath,
+      completeByRunning: `${relativeCommandBase()} file --request ${handoff.requestPath} --result ${handoff.resultPath}`
     }
   };
 }
@@ -1106,6 +1112,23 @@ function writeJsonFile(filePath, obj) {
   fs.writeFileSync(filePath, JSON.stringify(obj, null, 2) + '\n');
 }
 
+function timestampSlug(date = new Date()) {
+  return date.toISOString().replace(/[-:]/g, '').replace('.', '').replace('Z', 'Z');
+}
+
+function handoffFilePair(label) {
+  const stamp = timestampSlug();
+  const suffix = label ? `-${label}` : '';
+  return {
+    requestPath: `.agent-world/request-${stamp}${suffix}.json`,
+    resultPath: `.agent-world/result-${stamp}${suffix}.json`
+  };
+}
+
+function defaultResultPath() {
+  return path.join(process.cwd(), '.agent-world', `result-${timestampSlug()}.json`);
+}
+
 function requestContent(request) {
   const value = request.content !== undefined
     ? request.content
@@ -1192,13 +1215,16 @@ function withStatePath(statePath, fn) {
 }
 
 function runFileRequest(args) {
-  const requestPath = path.resolve(args.request || 'request.json');
+  if (!args.request) {
+    throw new Error('file mode requires --request .agent-world/request-<timestamp>.json');
+  }
+  const requestPath = path.resolve(args.request);
   const request = readJsonFile(requestPath);
-  const resultPath = path.resolve(args.result || request.resultPath || path.join(path.dirname(requestPath), 'result.json'));
+  const resultPath = path.resolve(args.result || request.resultPath || defaultResultPath());
   const configPath = path.resolve(request.configPath || request.config || DEFAULT_CONFIG_PATH);
   const statePath = path.resolve(request.statePath || request.state || DEFAULT_STATE_PATH);
   const cmd = request.command || request.cmd;
-  if (!cmd) throw new Error('request.json is missing command.');
+  if (!cmd) throw new Error('request JSON is missing command.');
 
   const result = withStatePath(statePath, () => {
     const config = loadConfig(configPath);
@@ -1216,7 +1242,7 @@ function help(config) {
   console.log(`Agent World Router
 
 Commands:
-  file --request <path> --result <path>
+  file --request .agent-world/request-<timestamp>.json --result .agent-world/result-<timestamp>.json
                                Read structured request JSON and write structured result JSON
 
 Compatibility commands below write structured JSON to stdout. Do not use them
@@ -1240,10 +1266,10 @@ State path:
 Host loop:
   1. Resolve ROUTER relative to the skill folder: scripts/agent-world-router.js
   2. Run from the project/world cwd containing agent-world.yaml
-  3. Write request.json with command and content.
-  4. Run node "$ROUTER" file --request request.json --result result.json
-  5. Read result.json and execute exactly one returned instruction as the host executor.
-  6. Write the next request.json to complete the turn or host action.
+  3. Write .agent-world/request-<timestamp>.json with command and content.
+  4. Run node "$ROUTER" file --request .agent-world/request-<timestamp>.json --result .agent-world/result-<timestamp>.json
+  5. Read .agent-world/result-<timestamp>.json and execute exactly one returned instruction as the host executor.
+  6. Write the next timestamped request file to complete the turn or host action.
   7. Repeat until type=done.
 `);
 }

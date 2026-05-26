@@ -16,6 +16,12 @@ const test = require('node:test');
 
 const skillRoot = path.resolve(__dirname, '..');
 const router = path.join(skillRoot, 'scripts', 'agent-world-router.js');
+let handoffCounter = 0;
+
+function testHandoffName(kind) {
+  handoffCounter += 1;
+  return `.agent-world/${kind}-20260102T030405${String(handoffCounter).padStart(3, '0')}Z.json`;
+}
 
 function makeWorld(options = {}) {
   const turnLimit = options.turnLimit || 12;
@@ -125,8 +131,12 @@ function runRaw(world, args, input = '') {
 }
 
 function runFile(world, request, options = {}) {
-  const requestPath = path.join(world.cwd, options.requestName || 'request.json');
-  const resultPath = path.join(world.cwd, options.resultName || 'result.json');
+  const handoffDir = path.join(world.cwd, '.agent-world');
+  fs.mkdirSync(handoffDir, { recursive: true });
+  const requestName = options.requestName || testHandoffName('request');
+  const resultName = options.resultName || testHandoffName('result');
+  const requestPath = path.join(world.cwd, requestName);
+  const resultPath = path.join(world.cwd, resultName);
   fs.writeFileSync(requestPath, JSON.stringify({
     configPath: path.join(world.cwd, 'agent-world.yaml'),
     statePath: world.statePath,
@@ -143,11 +153,46 @@ function runFile(world, request, options = {}) {
   });
 
   assert.equal(result.status, 0, result.stderr || result.stdout);
-  assert.match(result.stdout, /^agent-world-router: wrote result\.json\n$/);
+  assert.match(result.stdout, /^agent-world-router: wrote result-\d{8}T\d{9}Z\.json\n$/);
   assert.equal(result.stderr, '');
+  assert.ok(fs.existsSync(resultPath));
+  assert.match(path.relative(world.cwd, requestPath), /^\.agent-world\/request-\d{8}T\d{9}Z\.json$/);
+  assert.match(path.relative(world.cwd, resultPath), /^\.agent-world\/result-\d{8}T\d{9}Z\.json$/);
+  return {
+    stdout: result.stdout,
+    requestPath,
+    resultPath,
+    result: JSON.parse(fs.readFileSync(resultPath, 'utf8'))
+  };
+}
+
+function runFileWithDefaultResult(world, request) {
+  const handoffDir = path.join(world.cwd, '.agent-world');
+  fs.mkdirSync(handoffDir, { recursive: true });
+  const requestPath = path.join(world.cwd, testHandoffName('request'));
+  fs.writeFileSync(requestPath, JSON.stringify({
+    configPath: path.join(world.cwd, 'agent-world.yaml'),
+    statePath: world.statePath,
+    ...request
+  }, null, 2));
+
+  const result = spawnSync(process.execPath, [router, 'file', '--request', requestPath], {
+    cwd: world.cwd,
+    env: {
+      ...process.env
+    },
+    encoding: 'utf8'
+  });
+
+  assert.equal(result.status, 0, result.stderr || result.stdout);
+  const match = result.stdout.match(/^agent-world-router: wrote (result-\d{8}T\d{9}Z\.json)\n$/);
+  assert.ok(match, result.stdout);
+  const resultPath = path.join(handoffDir, match[1]);
   assert.ok(fs.existsSync(resultPath));
   return {
     stdout: result.stdout,
+    requestPath,
+    resultPath,
     result: JSON.parse(fs.readFileSync(resultPath, 'utf8'))
   };
 }
@@ -185,7 +230,9 @@ test('unit: loads agent-world.yaml from cwd and returns the configured entry age
   assert.equal(next.workflow.node, 'requirements');
   assert.deepEqual(next.workflow.next.map(item => item.node), ['architecture']);
   assert.match(next.systemPrompt, /@pm in the test world/);
-  assert.equal(next.responseContract.completeByRunning, 'node "$ROUTER" file --request request.json --result result.json');
+  assert.match(next.responseContract.completeByRunning, /^node "\$ROUTER" file --request \.agent-world\/request-\d{8}T\d{9}Z-turn-turn_0001\.json --result \.agent-world\/result-\d{8}T\d{9}Z-turn-turn_0001\.json$/);
+  assert.match(next.responseContract.requestPath, /^\.agent-world\/request-\d{8}T\d{9}Z-turn-turn_0001\.json$/);
+  assert.match(next.responseContract.resultPath, /^\.agent-world\/result-\d{8}T\d{9}Z-turn-turn_0001\.json$/);
   assert.deepEqual(next.responseContract.requestJson, {
     command: 'complete',
     turnId: 'turn_0001',
@@ -193,7 +240,7 @@ test('unit: loads agent-world.yaml from cwd and returns the configured entry age
   });
 });
 
-test('unit: file handoff writes user result to result.json and keeps stdout status-only', () => {
+test('unit: file handoff writes user result to timestamped .agent-world result and keeps stdout status-only', () => {
   const world = makeWorld();
 
   const output = runFile(world, {
@@ -204,9 +251,22 @@ test('unit: file handoff writes user result to result.json and keeps stdout stat
   assert.equal(output.result.type, 'agent_instruction');
   assert.equal(output.result.agent, 'pm');
   assert.equal(output.result.workflow.node, 'requirements');
-  assert.doesNotThrow(() => JSON.parse(fs.readFileSync(path.join(world.cwd, 'result.json'), 'utf8')));
+  assert.doesNotThrow(() => JSON.parse(fs.readFileSync(output.resultPath, 'utf8')));
   assert.doesNotMatch(output.stdout, /"type"/);
   assert.doesNotMatch(output.stdout, /agent_instruction/);
+});
+
+test('unit: file handoff defaults result output to timestamped .agent-world file', () => {
+  const world = makeWorld();
+
+  const output = runFileWithDefaultResult(world, {
+    command: 'user',
+    content: 'build an electron app'
+  });
+
+  assert.equal(output.result.type, 'agent_instruction');
+  assert.match(path.relative(world.cwd, output.requestPath), /^\.agent-world\/request-\d{8}T\d{9}Z\.json$/);
+  assert.match(path.relative(world.cwd, output.resultPath), /^\.agent-world\/result-\d{8}T\d{9}Z\.json$/);
 });
 
 test('unit: file handoff completes turns and host actions through structured files', () => {

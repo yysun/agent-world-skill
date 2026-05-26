@@ -1,6 +1,6 @@
 ---
 name: agent-world-skill
-description: Host-driven Agent World skill. The host executor routes every scoped message through scripts/agent-world-router.js and runs exactly one returned agent instruction at a time.
+description: Use when the user mentions Agent World, agent-world, agent world, agent-world.yaml, or asks to create, initialize, run, continue, route, or debug an Agent World workflow. The host executor routes scoped messages through scripts/agent-world-router.js and runs exactly one returned agent instruction at a time.
 ---
 
 # Agent World Skill
@@ -51,7 +51,7 @@ Follow the skill-relative `init-agent-world.md` process. That process asks the u
 
 ## Start Or Continue
 
-For every Agent-World-scoped message, write the exact message to `request.json` and run the router in file mode:
+For every Agent-World-scoped message, create `./.agent-world/` when needed, then write the exact message to a fresh timestamped request file:
 
 ```json
 {
@@ -61,10 +61,10 @@ For every Agent-World-scoped message, write the exact message to `request.json` 
 ```
 
 ```bash
-node "$ROUTER" file --request request.json --result result.json
+node "$ROUTER" file --request .agent-world/request-20260526T142233123Z-user.json --result .agent-world/result-20260526T142233123Z-user.json
 ```
 
-Read the structured payload from `result.json` and follow its `type`. Treat stdout or the tool result as a brief status notification only. Do not parse the real router payload from stdout.
+Read the structured payload from the matching timestamped result file and follow its `type`. Treat stdout or the tool result as a brief status notification only. Do not parse the real router payload from stdout.
 
 ## `agent_instruction`
 
@@ -78,6 +78,8 @@ The router returns the selected agent, loaded prompt, workflow node, context, an
 - `context`
 - `hostInstruction`
 - `responseContract.completeByRunning`
+- `responseContract.requestPath`
+- `responseContract.resultPath`
 
 Run exactly one turn as the named agent. Use `hostInstruction` as the execution brief. Produce one markdown message as that agent.
 
@@ -87,7 +89,7 @@ Rules:
 - Do not call tools during an agent turn.
 - If the agent needs filesystem, shell, web, Git, or other host work, emit an `agent-world-host-action` JSON block.
 - If the agent hands off with a paragraph-start mention such as `@architect`, stop after that handoff.
-- Immediately write the agent message back to `request.json`:
+- Immediately write the agent message back to the timestamped file from `responseContract.requestPath`:
 
 ```json
 {
@@ -100,10 +102,10 @@ Rules:
 Then run:
 
 ```bash
-node "$ROUTER" file --request request.json --result result.json
+node "$ROUTER" file --request .agent-world/request-20260526T142233123Z-turn-turn_0001.json --result .agent-world/result-20260526T142233123Z-turn-turn_0001.json
 ```
 
-Then read `result.json` and follow the next returned instruction.
+Then read `responseContract.resultPath` and follow the next returned instruction.
 
 ## `host_action`
 
@@ -119,7 +121,7 @@ The router returns:
 
 Now the host executor may use native tools, if the action is safe and approved. Execute the requested host work honestly; do not invent success.
 
-After completion, write a concise JSON result back through `request.json`.
+After completion, write a concise JSON result back through the timestamped file from `responseContract.requestPath`.
 
 Suggested result:
 
@@ -137,7 +139,7 @@ Suggested result:
 }
 ```
 
-Then run `node "$ROUTER" file --request request.json --result result.json` and read the next instruction from `result.json`.
+Then run the command from `responseContract.completeByRunning` and read the next instruction from `responseContract.resultPath`.
 
 ## `done`
 
@@ -157,9 +159,9 @@ No work is pending. Report that the Agent World workflow is idle.
 
 Repeat until `type` is `done`, `blocked`, or `idle`:
 
-1. Write the user message or previous completion to `request.json`.
-2. Run `node "$ROUTER" file --request request.json --result result.json`.
-3. Read the returned JSON from `result.json`.
+1. Write the user message or previous completion to a timestamped file under `./.agent-world/`.
+2. Run `node "$ROUTER" file --request .agent-world/request-<timestamp>.json --result .agent-world/result-<timestamp>.json`.
+3. Read the returned JSON from the matching timestamped result file under `./.agent-world/`.
 4. If `agent_instruction`, run exactly one agent turn and complete it.
 5. If `host_action`, execute the host action and complete it.
 6. If `blocked`, report the block and stop.

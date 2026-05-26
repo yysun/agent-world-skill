@@ -6,13 +6,13 @@ Move the documented Agent World host contract to file-based structured handoff w
 
 ## Architecture
 
-The router should expose a file-mode entrypoint that interprets `request.json`, runs the same command handlers used by the current CLI, writes the full router payload to `result.json`, and prints only a concise status line.
+The router should expose a file-mode entrypoint that interprets timestamped `.agent-world/request-*.json` files, runs the same command handlers used by the current CLI, writes the full router payload to timestamped `.agent-world/result-*.json` files, and prints only a concise status line.
 
 ```mermaid
 flowchart TD
-  A["Host writes request.json"] --> B["Router reads structured request"]
+  A["Host writes .agent-world/request-<timestamp>.json"] --> B["Router reads structured request"]
   B --> C["Run command handler"]
-  C --> D["Write full result.json"]
+  C --> D["Write full .agent-world/result-<timestamp>.json"]
   D --> E["Print brief stdout status"]
   C --> F["Write errors to stderr"]
 ```
