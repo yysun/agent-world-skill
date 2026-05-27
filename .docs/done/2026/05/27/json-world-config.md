@@ -7,6 +7,7 @@
 - Made prompt files mandatory through `promptPath`, with explicit config errors for missing or unreadable prompts.
 - Replaced the YAML sample with `world.example.json` and reusable Markdown prompt files.
 - Added `world.schema.json` and `$schema` wiring for host/client/editor validation.
+- Clarified recreate semantics: rewrite the generated schema/config bundle and clean `.agent-world/prompts/` before regenerating prompts.
 - Updated host instructions, init guidance, README, unit tests, and e2e tests to use JSON config plus prompt files.
 
 ## Verification

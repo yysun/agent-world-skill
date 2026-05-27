@@ -7,7 +7,7 @@ Creation is host setup. Do not start the router loop until `.agent-world/world.j
 ## Process
 
 1. Resolve `.agent-world/world.json` under the current working directory. Create `.agent-world/` and `.agent-world/prompts/` if needed.
-2. If `.agent-world/world.json` already exists, ask the user whether to recreate and overwrite it. Do not write unless they explicitly confirm.
+2. If `.agent-world/world.json` already exists, ask the user whether to recreate and overwrite the generated world bundle. Do not write unless they explicitly confirm.
 3. On first create or confirmed recreate, require exactly one workflow pattern before writing. The only valid choices are the nine names under "Workflow Patterns" below. Do not infer, default, rename, group, shorten, or create `.agent-world/world.json` until the user chooses one of those exact patterns.
 4. If the user did not already name exactly one pattern, ask them to choose using a structured ask-user-input, user-input, or human-in-the-loop tool.
    - Use a tool that can show all workflow patterns as selectable options.
@@ -19,9 +19,13 @@ Creation is host setup. Do not start the router loop until `.agent-world/world.j
    - If a tool is limited to fewer than nine options, it is not suitable for this choice.
    - Do not use plain chat if a suitable structured user-input or human-in-the-loop tool is available.
    - If no available tool can show all options, ask in chat and list every pattern.
-5. After the user chooses, write a complete `.agent-world/world.json` with sample agents, prompt paths, and workflow edges matching the selected pattern. Also write `.agent-world/world.schema.json`. Write each long agent prompt to a separate `.agent-world/prompts/<agent>.md` file.
-6. Use the cwd basename, normalized to kebab-case, as `world.id` and `world.name` unless the user gave a better name.
-7. Include these baseline settings unless the user requested different ones:
+5. On confirmed recreate, delete the existing `.agent-world/prompts/` directory before writing the new generated prompt files. This prevents stale prompt files from surviving after agents are renamed, removed, or replaced. Do not delete unrelated files under `.agent-world/`, such as request/result handoff files, state files, registry files, or user-owned notes.
+6. After the user chooses, write a complete generated world bundle:
+   - `.agent-world/world.json`
+   - `.agent-world/world.schema.json`
+   - `.agent-world/prompts/<agent>.md` for each generated agent prompt
+7. Use the cwd basename, normalized to kebab-case, as `world.id` and `world.name` unless the user gave a better name.
+8. Include these baseline settings unless the user requested different ones:
 
    ```json
    {
@@ -36,10 +40,10 @@ Creation is host setup. Do not start the router loop until `.agent-world/world.j
    }
    ```
 
-8. Prefer `workflow.type: dag` and `workflow.enforceEdges: true`. For loop-shaped patterns, keep `turnLimit` conservative and make the stop condition explicit in prompts.
-9. Agent entries in `world.json` must use `promptPath`, not inline prompt text. Include `"$schema": "./world.schema.json"` at the top of `world.json` so editors, hosts, and clients can validate the file before calling the router.
-10. Agent prompts must tell agents to use paragraph-start `@mentions`, stay inside the workflow, never run tools directly, request host work with an `agent-world-host-action` JSON block, and end final responses with `<world>pass</world>`.
-11. Report the created path and selected pattern. Do not run the router unless the user also asked to start using the world.
+9. Prefer `workflow.type: dag` and `workflow.enforceEdges: true`. For loop-shaped patterns, keep `turnLimit` conservative and make the stop condition explicit in prompts.
+10. Agent entries in `world.json` must use `promptPath`, not inline prompt text. Include `"$schema": "./world.schema.json"` at the top of `world.json` so editors, hosts, and clients can validate the file before calling the router.
+11. Agent prompts must tell agents to use paragraph-start `@mentions`, stay inside the workflow, never run tools directly, request host work with an `agent-world-host-action` JSON block, and end final responses with `<world>pass</world>`.
+12. Report the created path and selected pattern. Do not run the router unless the user also asked to start using the world.
 
 ## Workflow Patterns
 

@@ -189,7 +189,7 @@ Creation is separate from execution. When the user says something like `create a
 The init process:
 
 1. Checks whether `.agent-world/world.json` already exists under the current working directory.
-2. Asks whether to recreate and overwrite if the file exists.
+2. Asks whether to recreate and overwrite the generated world bundle if the file exists.
 3. On first create or confirmed recreate, asks the user to choose one workflow pattern, using a user-input or human-in-the-loop tool that can show every option when available:
    - Broadcast
    - Direct handoff
@@ -201,8 +201,9 @@ The init process:
    - Debate / ping-pong loop
    - Orchestrator-worker
    If the user has not already named one of these patterns, creation stops here until they choose. Agent World should not infer or default the workflow type.
-4. Writes a valid `.agent-world/world.json` with sample agents, prompt paths, edges, and stop behavior for the selected pattern, plus `.agent-world/world.schema.json` and matching `.agent-world/prompts/*.md` files.
-5. Stops after creation unless the user also asks to run the world.
+4. On confirmed recreate, removes the old `.agent-world/prompts/` directory before writing new generated prompt files, while leaving unrelated `.agent-world/` files alone.
+5. Writes a valid `.agent-world/world.json` with sample agents, prompt paths, edges, and stop behavior for the selected pattern, plus `.agent-world/world.schema.json` and matching `.agent-world/prompts/*.md` files.
+6. Stops after creation unless the user also asks to run the world.
 
 ## The Short Version
 
