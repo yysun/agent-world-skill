@@ -24,8 +24,9 @@ Creation is host setup. Do not start the router loop until `.agent-world/world.j
    - `.agent-world/world.json`
    - `.agent-world/world.schema.json`
    - `.agent-world/prompts/<agent>.md` for each generated agent prompt
-7. Use the cwd basename, normalized to kebab-case, as `world.id` and `world.name` unless the user gave a better name.
-8. Include these baseline settings unless the user requested different ones:
+7. Copy `.agent-world/world.schema.json` exactly from the skill-relative `world.schema.json`. Do not invent, simplify, rewrite, or regenerate the schema.
+8. Use the cwd basename, normalized to kebab-case, as `world.id` and `world.name` unless the user gave a better name.
+9. Include these baseline settings unless the user requested different ones:
 
    ```json
    {
@@ -40,10 +41,16 @@ Creation is host setup. Do not start the router loop until `.agent-world/world.j
    }
    ```
 
-9. Prefer `workflow.type: dag` and `workflow.enforceEdges: true`. For loop-shaped patterns, keep `turnLimit` conservative and make the stop condition explicit in prompts.
-10. Agent entries in `world.json` must use `promptPath`, not inline prompt text. Include `"$schema": "./world.schema.json"` at the top of `world.json` so editors, hosts, and clients can validate the file before calling the router.
-11. Agent prompts must tell agents to use paragraph-start `@mentions`, stay inside the workflow, never run tools directly, request host work with an `agent-world-host-action` JSON block, and end final responses with `<world>pass</world>`.
-12. Report the created path and selected pattern. Do not run the router unless the user also asked to start using the world.
+10. Use the canonical object shape from `world.schema.json` and `world.example.json`:
+   - `agents` is an object keyed by agent id, not an array.
+   - `workflow.nodes` is an object keyed by workflow node id, not an array.
+   - `workflow.edges` is an object whose keys are source node ids or `human`, and whose values are arrays of target node ids.
+   - Do not write `id` inside each agent or node object; the object key is the id.
+   - Do not write edge objects such as `{ "from": "a", "to": "b" }`.
+11. Prefer `workflow.type: dag` and `workflow.enforceEdges: true`. For loop-shaped patterns, keep `turnLimit` conservative and make the stop condition explicit in prompts.
+12. Agent entries in `world.json` must use `promptPath`, not inline prompt text. Include `"$schema": "./world.schema.json"` at the top of `world.json` so editors, hosts, and clients can validate the file before calling the router.
+13. Agent prompts must tell agents to use paragraph-start `@mentions`, stay inside the workflow, never run tools directly, request host work with an `agent-world-host-action` JSON block, and end final responses with `<world>pass</world>`.
+14. Report the created path and selected pattern. Do not run the router unless the user also asked to start using the world.
 
 ## Workflow Patterns
 
@@ -78,5 +85,6 @@ Creation is host setup. Do not start the router loop until `.agent-world/world.j
 - nodes with `requires` reference existing workflow nodes
 - every agent has a `promptPath` pointing to an existing Markdown prompt file
 - final nodes tell the agent to end with `<world>pass</world>`
+- `agents`, `workflow.nodes`, and `workflow.edges` are keyed objects, not arrays
 
 The schema validates shape, required fields, primitive types, and allowed config keys. The router still validates graph references and prompt file existence because JSON Schema cannot reliably prove that every edge target, node reference, and prompt path exists.

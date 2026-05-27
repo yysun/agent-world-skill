@@ -33,7 +33,7 @@ The agents do not directly run shell commands or edit files. They request host a
 - `world.example.json`: a sample world definition with product, architecture, implementation, QA, and security agents.
 - `world.schema.json`: the JSON Schema for generated `.agent-world/world.json` files.
 - `prompts/`: sample prompt files referenced by `world.example.json`.
-- `init-agent-world.md`: human-readable init reference. Runtime init instructions are in `SKILL.md` so agents do not need to open a second file.
+- `init-agent-world.md`: required init reference for creating `.agent-world/world.json` from a selected messaging pattern.
 - `mention-routing-rules.md`: the standalone mention-routing rule reference.
 - `tests/agent-world-router.test.js`: router tests.
 
@@ -184,7 +184,7 @@ You can still start manually by copying `world.example.json` to `.agent-world/wo
 
 ## Creating A World
 
-Creation is separate from execution. When the user says something like `create agent world`, `init agent-world`, or `set up world.json`, Codex should follow the self-contained init process in `SKILL.md` instead of starting the router loop. `init-agent-world.md` mirrors that process for humans.
+Creation is separate from execution. When the user says something like `create agent world`, `init agent-world`, or `set up world.json`, Codex should load and follow the skill-relative `init-agent-world.md` reference instead of starting the router loop.
 
 The init process:
 
@@ -202,8 +202,9 @@ The init process:
    - Orchestrator-worker
    If the user has not already named one of these patterns, creation stops here until they choose. Agent World should not infer or default the workflow type.
 4. On confirmed recreate, removes the old `.agent-world/prompts/` directory before writing new generated prompt files, while leaving unrelated `.agent-world/` files alone.
-5. Writes a valid `.agent-world/world.json` with sample agents, prompt paths, edges, and stop behavior for the selected pattern, plus `.agent-world/world.schema.json` and matching `.agent-world/prompts/*.md` files.
-6. Stops after creation unless the user also asks to run the world.
+5. Copies the skill's `world.schema.json` exactly to `.agent-world/world.schema.json`.
+6. Writes a valid `.agent-world/world.json` with sample agents, prompt paths, keyed workflow nodes, keyed edges, and stop behavior for the selected pattern, plus matching `.agent-world/prompts/*.md` files.
+7. Stops after creation unless the user also asks to run the world.
 
 ## The Short Version
 

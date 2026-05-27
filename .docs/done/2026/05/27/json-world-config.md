@@ -8,6 +8,7 @@
 - Replaced the YAML sample with `world.example.json` and reusable Markdown prompt files.
 - Added `world.schema.json` and `$schema` wiring for host/client/editor validation.
 - Clarified recreate semantics: rewrite the generated schema/config bundle and clean `.agent-world/prompts/` before regenerating prompts.
+- Clarified schema semantics: copy the skill schema exactly and generate keyed objects for agents, nodes, and edges.
 - Updated host instructions, init guidance, README, unit tests, and e2e tests to use JSON config plus prompt files.
 
 ## Verification
