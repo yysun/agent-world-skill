@@ -1,33 +1,27 @@
-# Init Agent World Process
+# Init Agent World
 
-Use this process when the user asks to create, initialize, init, scaffold, or set up an Agent World.
+Use this when the user asks to create, initialize, scaffold, or set up an Agent World. Command-shaped input such as `agent-world init` or `agent-world: init` means this process, not a tool call.
 
-Creation is a host setup task. Do not start the router loop until an `agent-world.yaml` exists and the user asks to use it.
-
-## Trigger Examples
-
-- `create agent world`
-- `init agent-world`
-- `set up agent-world.yaml`
-- `make an agent world for this project`
+Creation is host setup. Do not start the router loop until `agent-world.yaml` exists and the user asks to use it.
 
 ## Process
 
 1. Resolve `agent-world.yaml` in the current working directory.
-2. If `agent-world.yaml` already exists, tell the user it exists and ask for explicit overwrite confirmation before writing. Do not overwrite silently.
-3. Ask the user which messaging workflow they want, using the skill-relative `messaging-patterns.md` as the source list. Offer the pattern names, not a generic open-ended question:
-   - Broadcast
-   - Direct handoff
-   - Multi-agent fan-out
-   - Fan-in / collector
-   - Sequential pipeline
-   - Intent router
-   - FSM / state-token workflow
-   - Debate / ping-pong loop
-   - Orchestrator-worker
-4. After the user chooses, create a complete `agent-world.yaml` in the current working directory with sample agents, system prompts, and a workflow matching the selected pattern.
-5. Keep the sample useful but small. Use the cwd basename, normalized to kebab-case, as `world.id` and `world.name` unless the user gave a better name.
-6. Include these baseline world settings unless the user requested different ones:
+2. If it already exists, ask for explicit overwrite confirmation before writing.
+3. Require exactly one workflow pattern before writing. The only valid choices are the nine names under "Workflow Patterns" below. Do not infer, default, rename, group, shorten, or create `agent-world.yaml` until the user chooses one of those exact patterns.
+4. If the user did not already name exactly one pattern, ask them to choose using a structured ask-user-input, user-input, or human-in-the-loop tool.
+   - Use a tool that can show all workflow patterns as selectable options.
+   - Include every pattern listed below.
+   - Include short descriptions when the tool supports descriptions.
+   - Do not present fewer than nine options.
+   - Do not replace the patterns with generic presets such as `Single-Agent Loop`, `Planner -> Executor`, `Planner -> Executor -> Reviewer`, `Specialist Router`, or `Custom`.
+   - Do not include a `Custom` option unless the user explicitly asks for a custom pattern.
+   - If a tool is limited to fewer than nine options, it is not suitable for this choice.
+   - Do not use plain chat if a suitable structured user-input or human-in-the-loop tool is available.
+   - If no available tool can show all options, ask in chat and list every pattern.
+5. After the user chooses, write a complete `agent-world.yaml` with sample agents, prompts, and workflow edges matching the selected pattern.
+6. Use the cwd basename, normalized to kebab-case, as `world.id` and `world.name` unless the user gave a better name.
+7. Include these baseline settings unless the user requested different ones:
 
    ```yaml
    world:
@@ -38,33 +32,38 @@ Creation is a host setup task. Do not start the router loop until an `agent-worl
      mode: host_delegated
    ```
 
-7. Prefer `workflow.type: dag` and `workflow.enforceEdges: true`. For loop-shaped patterns such as debate, keep a conservative `turnLimit` and make the stop condition explicit in agent prompts.
-8. Add agent prompts that tell agents to:
-   - use paragraph-start `@mentions` for handoffs
-   - stay inside the configured workflow
-   - never run tools directly
-   - emit an `agent-world-host-action` JSON block when host work is needed
-   - end the final response with `<world>pass</world>`
-9. After writing, report the created path and the selected pattern. Do not run the router unless the user also asks to start using the world.
+8. Prefer `workflow.type: dag` and `workflow.enforceEdges: true`. For loop-shaped patterns, keep `turnLimit` conservative and make the stop condition explicit in prompts.
+9. Agent prompts must tell agents to use paragraph-start `@mentions`, stay inside the workflow, never run tools directly, request host work with an `agent-world-host-action` JSON block, and end final responses with `<world>pass</world>`.
+10. Report the created path and selected pattern. Do not run the router unless the user also asked to start using the world.
+
+## Workflow Patterns
+
+- **Broadcast**: a human/world message with no paragraph-start mention can wake all eligible active agents.
+- **Direct handoff**: one agent or human routes to one specific agent with a paragraph-start mention.
+- **Multi-agent fan-out**: one message wakes multiple lanes with multiple paragraph-start mentions.
+- **Fan-in / collector**: multiple agents report to a collector, which merges results and returns to the human.
+- **Sequential pipeline**: agents proceed in order, such as spec -> build -> test -> review.
+- **Intent router**: one router classifies the request and mentions exactly one specialist.
+- **FSM / state-token workflow**: agents carry state tokens such as `[STATE=PLAN]` and route by state.
+- **Debate / ping-pong loop**: two agents alternate with explicit mentions until a stop condition.
+- **Orchestrator-worker**: a controller delegates to workers, then a synthesizer merges results.
 
 ## Pattern-To-Sample Mapping
 
-- **Broadcast**: create an entry `broadcaster` agent plus peer agents such as `researcher`, `critic`, and `planner`; the broadcaster immediately mentions all peer agents on separate paragraph-start lines; give each peer a terminal edge to `collector`.
-- **Direct handoff**: create `sender` and `receiver`; entry is `sender`; edge `sender -> receiver`; `receiver` finishes.
-- **Multi-agent fan-out**: create `lead`, `qa`, `security`, and `collector`; `lead` mentions both reviewers on separate paragraph-start lines; both reviewers require or route to `collector`.
-- **Fan-in / collector**: create `researcher`, `analyst`, and `collector`; human can start multiple lanes; `collector.requires` waits for the lanes before synthesizing.
+- **Broadcast**: create `broadcaster`, `researcher`, `critic`, `planner`, and `collector`; broadcaster mentions all peers; peers route to collector.
+- **Direct handoff**: create `sender` and `receiver`; entry is sender; receiver finishes.
+- **Multi-agent fan-out**: create `lead`, `qa`, `security`, and `collector`; lead mentions both reviewers; reviewers route to collector.
+- **Fan-in / collector**: create `researcher`, `analyst`, and `collector`; collector requires the lanes before synthesizing.
 - **Sequential pipeline**: create `intake`, `architect`, `builder`, `reviewer`, and `final`; edges run in order.
-- **Intent router**: create `router`, `docs`, `code`, and `ops`; `router` classifies the request and mentions exactly one specialist; specialists finish or return to `router`.
-- **FSM / state-token workflow**: create `state_router`, `planner`, `executor`, and `reviewer`; prompts must carry `[STATE=...]` tokens and route according to state.
-- **Debate / ping-pong loop**: create `pro`, `con`, and `judge`; allow bounded alternation between `pro` and `con`; `judge` synthesizes and stops. Keep `turnLimit` low enough to prevent runaway loops.
-- **Orchestrator-worker**: create `orchestrator`, `worker_a`, `worker_b`, and `synthesizer`; orchestrator delegates to workers and synthesizer merges results.
+- **Intent router**: create `router`, `docs`, `code`, and `ops`; router mentions exactly one specialist.
+- **FSM / state-token workflow**: create `state_router`, `planner`, `executor`, and `reviewer`; prompts carry `[STATE=...]` tokens.
+- **Debate / ping-pong loop**: create `pro`, `con`, and `judge`; allow bounded alternation; judge synthesizes and stops.
+- **Orchestrator-worker**: create `orchestrator`, `worker_a`, `worker_b`, and `synthesizer`; orchestrator delegates; synthesizer merges.
 
 ## YAML Requirements
 
-The generated YAML must be valid for `scripts/agent-world-router.js`:
-
 - every workflow node references an existing agent
-- every edge source and target exists, except the special `human` source
+- every edge source and target exists, except `human`
 - `workflow.entry` exists
 - `workflow.entryAgent` matches the entry node's agent
 - nodes with `requires` reference existing workflow nodes

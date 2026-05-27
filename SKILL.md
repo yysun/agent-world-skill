@@ -1,6 +1,6 @@
 ---
 name: agent-world-skill
-description: Use when the user mentions Agent World, agent-world, agent world, agent-world.yaml, or asks to create, initialize, run, continue, route, or debug an Agent World workflow. The host executor routes scoped messages through scripts/agent-world-router.js and runs exactly one returned agent instruction at a time.
+description: Use when the user intends to create, initialize, run, continue, route, inspect, or debug an Agent World workflow, including requests that mention Agent World, agent-world, agent world, agent-world.yaml, or command-like forms such as agent-world: init. Treat command-like forms as natural-language requests, not tool calls.
 ---
 
 # Agent World Skill
@@ -47,11 +47,13 @@ Run router commands from the project/world cwd so the router finds `WORLD` at `.
 
 When the user asks to create, initialize, init, scaffold, or set up an Agent World, do not start the router loop yet. Creation is a host setup task.
 
-Follow the skill-relative `init-agent-world.md` process. That process asks the user to choose a workflow from `messaging-patterns.md`, protects any existing `agent-world.yaml`, and writes the selected sample world into the current working directory.
+Treat shorthand command forms such as `agent-world: init`, `agent-world init`, `agent-world:init`, `agent world init`, and `init agent-world` as init requests. These are not requests to call an `init` tool or function. Do not report `unknown_tool` for these forms; follow the init process below.
+
+Follow the skill-relative `init-agent-world.md` process. That process contains the only supported workflow patterns and has a hard workflow-selection gate: if the user has not already selected exactly one workflow pattern, ask them to choose one. Use a structured ask-user-input, user-input, or human-in-the-loop tool only when it can show all nine patterns as selectable options; otherwise ask in chat and list every pattern. Do not compress, rename, replace, or add workflow choices. Do not choose a default, infer a pattern, or write `agent-world.yaml` before that choice. The process also protects any existing `agent-world.yaml` before writing.
 
 ## Start Or Continue
 
-For every Agent-World-scoped message, create `./.agent-world/` when needed, then write the exact message to a fresh timestamped request file:
+For every Agent-World-scoped message that is not a create/init/setup request, create `./.agent-world/` when needed, then write the exact message to a fresh timestamped request file:
 
 ```json
 {

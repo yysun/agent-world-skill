@@ -31,7 +31,6 @@ The agents do not directly run shell commands or edit files. They request host a
 - `scripts/agent-world-router.js`: the router that loads the world, tracks state, and returns the next instruction.
 - `agent-world.example.yaml`: a sample world definition with product, architecture, implementation, QA, and security agents.
 - `init-agent-world.md`: the setup process for creating a new `agent-world.yaml` from a selected messaging pattern.
-- `messaging-patterns.md`: the supported workflow patterns for new worlds.
 - `mention-routing-rules.md`: the standalone mention-routing rule reference.
 - `tests/agent-world-router.test.js`: router tests.
 
@@ -164,7 +163,9 @@ The router owns all of this. Agents should mention the intended next target, but
    create agent world
    ```
 
-   Codex should ask which messaging workflow you want, using `messaging-patterns.md` as the source list. After you choose, it writes `agent-world.yaml` in the current working directory with sample agents and a matching workflow.
+   Short command forms such as `agent-world: init` and `agent-world init` mean the same thing. They are not tool calls.
+
+   Codex should ask which messaging workflow you want using a user-input or human-in-the-loop tool that can show all nine workflow patterns. If no suitable tool is available, it should ask in chat and list every pattern. It must not compress, rename, replace, or add workflow choices. After you choose, it writes `agent-world.yaml` in the current working directory with sample agents and a matching workflow.
 
    If `agent-world.yaml` already exists, Codex must ask before overwriting it.
 
@@ -186,7 +187,7 @@ The init process:
 
 1. Checks whether `agent-world.yaml` already exists in the current working directory.
 2. Asks for overwrite confirmation if the file exists.
-3. Asks the user to choose one workflow pattern:
+3. Asks the user to choose one workflow pattern, using a user-input or human-in-the-loop tool that can show every option when available:
    - Broadcast
    - Direct handoff
    - Multi-agent fan-out
@@ -196,6 +197,7 @@ The init process:
    - FSM / state-token workflow
    - Debate / ping-pong loop
    - Orchestrator-worker
+   If the user has not already named one of these patterns, creation stops here until they choose. Agent World should not infer or default the workflow type.
 4. Writes a valid `agent-world.yaml` with sample agents, prompts, edges, and stop behavior for the selected pattern.
 5. Stops after creation unless the user also asks to run the world.
 
