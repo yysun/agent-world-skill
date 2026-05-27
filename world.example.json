@@ -1,5 +1,4 @@
 {
-  "$schema": "./world.schema.json",
   "world": {
     "id": "app-builder",
     "name": "app-builder",

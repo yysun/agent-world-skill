@@ -6,9 +6,9 @@
 - Removed the router's homemade YAML parser and parser export.
 - Made prompt files mandatory through `promptPath`, with explicit config errors for missing or unreadable prompts.
 - Replaced the YAML sample with `world.example.json` and reusable Markdown prompt files.
-- Added `world.schema.json` and `$schema` wiring for host/client/editor validation.
-- Clarified recreate semantics: rewrite the generated schema/config bundle and clean `.agent-world/prompts/` before regenerating prompts.
-- Clarified schema semantics: copy the skill schema exactly and generate keyed objects for agents, nodes, and edges.
+- Added skill-relative `world.schema.json` for host/client/editor validation.
+- Clarified recreate semantics: rewrite the generated config/prompt bundle and clean `.agent-world/prompts/` before regenerating prompts.
+- Clarified schema semantics: validate against the skill schema and generate keyed objects for agents, nodes, and edges.
 - Updated host instructions, init guidance, README, unit tests, and e2e tests to use JSON config plus prompt files.
 
 ## Verification

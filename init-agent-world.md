@@ -22,15 +22,13 @@ Creation is host setup. Do not start the router loop until `.agent-world/world.j
 5. On confirmed recreate, delete the existing `.agent-world/prompts/` directory before writing the new generated prompt files. This prevents stale prompt files from surviving after agents are renamed, removed, or replaced. Do not delete unrelated files under `.agent-world/`, such as request/result handoff files, state files, registry files, or user-owned notes.
 6. After the user chooses, write a complete generated world bundle:
    - `.agent-world/world.json`
-   - `.agent-world/world.schema.json`
    - `.agent-world/prompts/<agent>.md` for each generated agent prompt
-7. Copy `.agent-world/world.schema.json` exactly from the skill-relative `world.schema.json`. Do not invent, simplify, rewrite, or regenerate the schema.
+7. Do not copy, generate, simplify, or rewrite `world.schema.json` into `.agent-world/`. The canonical schema stays skill-relative at `world.schema.json`; hosts and clients that validate worlds should load that skill schema directly.
 8. Use the cwd basename, normalized to kebab-case, as `world.id` and `world.name` unless the user gave a better name.
 9. Include these baseline settings unless the user requested different ones:
 
    ```json
    {
-     "$schema": "./world.schema.json",
      "world": {
        "id": "example-world",
        "name": "example-world",
@@ -48,7 +46,7 @@ Creation is host setup. Do not start the router loop until `.agent-world/world.j
    - Do not write `id` inside each agent or node object; the object key is the id.
    - Do not write edge objects such as `{ "from": "a", "to": "b" }`.
 11. Prefer `workflow.type: dag` and `workflow.enforceEdges: true`. For loop-shaped patterns, keep `turnLimit` conservative and make the stop condition explicit in prompts.
-12. Agent entries in `world.json` must use `promptPath`, not inline prompt text. Include `"$schema": "./world.schema.json"` at the top of `world.json` so editors, hosts, and clients can validate the file before calling the router.
+12. Agent entries in `world.json` must use `promptPath`, not inline prompt text. Do not include `"$schema": "./world.schema.json"` in generated worlds unless a specific host/client owns that schema reference strategy.
 13. Agent prompts must tell agents to use paragraph-start `@mentions`, stay inside the workflow, never run tools directly, request host work with an `agent-world-host-action` JSON block, and end final responses with `<world>pass</world>`.
 14. Report the created path and selected pattern. Do not run the router unless the user also asked to start using the world.
 
@@ -87,4 +85,4 @@ Creation is host setup. Do not start the router loop until `.agent-world/world.j
 - final nodes tell the agent to end with `<world>pass</world>`
 - `agents`, `workflow.nodes`, and `workflow.edges` are keyed objects, not arrays
 
-The schema validates shape, required fields, primitive types, and allowed config keys. The router still validates graph references and prompt file existence because JSON Schema cannot reliably prove that every edge target, node reference, and prompt path exists.
+The skill-relative `world.schema.json` validates shape, required fields, primitive types, and allowed config keys. The router still validates graph references and prompt file existence because JSON Schema cannot reliably prove that every edge target, node reference, and prompt path exists.

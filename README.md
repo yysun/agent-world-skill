@@ -31,7 +31,7 @@ The agents do not directly run shell commands or edit files. They request host a
 - `SKILL.md`: instructions for Codex when it acts as the Agent World host executor.
 - `scripts/agent-world-router.js`: the router that loads the world, tracks state, and returns the next instruction.
 - `world.example.json`: a sample world definition with product, architecture, implementation, QA, and security agents.
-- `world.schema.json`: the JSON Schema for generated `.agent-world/world.json` files.
+- `world.schema.json`: the skill-relative JSON Schema that hosts and clients can use to validate `.agent-world/world.json`.
 - `prompts/`: sample prompt files referenced by `world.example.json`.
 - `init-agent-world.md`: required init reference for creating `.agent-world/world.json` from a selected messaging pattern.
 - `mention-routing-rules.md`: the standalone mention-routing rule reference.
@@ -168,7 +168,7 @@ The router owns all of this. Agents should mention the intended next target, but
 
    Short command forms such as `agent-world: init` and `agent-world init` mean the same thing. They are not tool calls.
 
-   Codex should ask which messaging workflow you want using a user-input or human-in-the-loop tool that can show all nine workflow patterns. If no suitable tool is available, it should ask in chat and list every pattern. It must not compress, rename, replace, or add workflow choices. After you choose, it writes `.agent-world/world.json`, `.agent-world/world.schema.json`, and `.agent-world/prompts/*.md` with sample agents and a matching workflow.
+   Codex should ask which messaging workflow you want using a user-input or human-in-the-loop tool that can show all nine workflow patterns. If no suitable tool is available, it should ask in chat and list every pattern. It must not compress, rename, replace, or add workflow choices. After you choose, it writes `.agent-world/world.json` and `.agent-world/prompts/*.md` with sample agents and a matching workflow.
 
    If `.agent-world/world.json` already exists, Codex must ask whether to recreate and overwrite it. If recreating, Codex must ask for the workflow again from the nine options.
 
@@ -180,7 +180,7 @@ The router owns all of this. Agents should mention the intended next target, but
 
 The skill should route the request through the router script. Codex will then run the first selected agent, send that agent's response back to the router, and continue through the workflow.
 
-You can still start manually by copying `world.example.json` to `.agent-world/world.json`, `world.schema.json` to `.agent-world/world.schema.json`, and `prompts/` to `.agent-world/prompts/`. The init flow is the safer default because it forces the workflow choice up front.
+You can still start manually by copying `world.example.json` to `.agent-world/world.json` and `prompts/` to `.agent-world/prompts/`. The init flow is the safer default because it forces the workflow choice up front.
 
 ## Creating A World
 
@@ -202,8 +202,8 @@ The init process:
    - Orchestrator-worker
    If the user has not already named one of these patterns, creation stops here until they choose. Agent World should not infer or default the workflow type.
 4. On confirmed recreate, removes the old `.agent-world/prompts/` directory before writing new generated prompt files, while leaving unrelated `.agent-world/` files alone.
-5. Copies the skill's `world.schema.json` exactly to `.agent-world/world.schema.json`.
-6. Writes a valid `.agent-world/world.json` with sample agents, prompt paths, keyed workflow nodes, keyed edges, and stop behavior for the selected pattern, plus matching `.agent-world/prompts/*.md` files.
+5. Writes a valid `.agent-world/world.json` with sample agents, prompt paths, keyed workflow nodes, keyed edges, and stop behavior for the selected pattern, plus matching `.agent-world/prompts/*.md` files.
+6. Leaves `world.schema.json` in the skill directory; hosts and clients validate against that canonical schema instead of copying it into every world.
 7. Stops after creation unless the user also asks to run the world.
 
 ## The Short Version

@@ -12,7 +12,7 @@ You are the host executor for Agent World.
 Agent World owns:
 
 - agent definitions and the DAG workflow in `.agent-world/world.json`
-- the config schema in `.agent-world/world.schema.json`
+- the config schema in the skill-relative `world.schema.json`
 - system prompts in `.agent-world/prompts/*.md`
 - message persistence
 - paragraph-start `@mention` routing
@@ -50,7 +50,7 @@ When the user asks to create, initialize, init, scaffold, or set up an Agent Wor
 
 Treat shorthand command forms such as `agent-world: init`, `agent-world init`, `agent-world:init`, `agent world init`, and `init agent-world` as init requests. These are not requests to call an `init` tool or function. Do not report `unknown_tool` for these forms.
 
-Before doing any init work, load and follow the skill-relative reference file `init-agent-world.md`. Resolve it relative to the directory containing this `SKILL.md`, not relative to the user's project cwd. That file is the source of truth for creating `.agent-world/world.json`, handling recreate/overwrite confirmation, selecting exactly one of the nine workflow patterns, copying the exact skill-relative `world.schema.json` to `.agent-world/world.schema.json`, and generating prompt files under `.agent-world/prompts/`.
+Before doing any init work, load and follow the skill-relative reference file `init-agent-world.md`. Resolve it relative to the directory containing this `SKILL.md`, not relative to the user's project cwd. That file is the source of truth for creating `.agent-world/world.json`, handling recreate/overwrite confirmation, selecting exactly one of the nine workflow patterns, using the canonical skill-relative `world.schema.json` shape, and generating prompt files under `.agent-world/prompts/`.
 
 If `init-agent-world.md` cannot be read, stop and report that the Agent World skill installation is incomplete. Do not invent fallback workflow options, do not use generic presets, and do not create or overwrite `.agent-world/world.json`.
 
