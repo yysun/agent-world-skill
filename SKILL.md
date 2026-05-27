@@ -48,9 +48,34 @@ Run router commands from the project/world cwd so the router finds `WORLD` at `.
 
 When the user asks to create, initialize, init, scaffold, or set up an Agent World, do not start the router loop yet. Creation is a host setup task.
 
-Treat shorthand command forms such as `agent-world: init`, `agent-world init`, `agent-world:init`, `agent world init`, and `init agent-world` as init requests. These are not requests to call an `init` tool or function. Do not report `unknown_tool` for these forms; follow the init process below.
+Treat shorthand command forms such as `agent-world: init`, `agent-world init`, `agent-world:init`, `agent world init`, and `init agent-world` as init requests. These are not requests to call an `init` tool or function. Do not report `unknown_tool` for these forms.
 
-Follow the skill-relative `init-agent-world.md` process. That process contains the only supported workflow patterns and has a hard workflow-selection gate: if the user has not already selected exactly one workflow pattern, ask them to choose one. Use a structured ask-user-input, user-input, or human-in-the-loop tool only when it can show all nine patterns as selectable options; otherwise ask in chat and list every pattern. Do not compress, rename, replace, or add workflow choices. Do not choose a default, infer a pattern, or write `.agent-world/world.json` before that choice. The process also protects any existing `.agent-world/world.json` before writing.
+The init rules in this section are complete. Do not stop to read `init-agent-world.md`; some hosts expose only `SKILL.md` to the agent. Use `init-agent-world.md` only as optional human documentation.
+
+Init process:
+
+1. Resolve `.agent-world/world.json` under the current working directory. Create `.agent-world/` and `.agent-world/prompts/` if needed.
+2. If `.agent-world/world.json` exists, ask whether to recreate and overwrite the generated world bundle. Do not write unless the user explicitly confirms.
+3. On first create or confirmed recreate, require exactly one workflow pattern before writing. Do not infer, default, rename, group, shorten, or create files until the user chooses one exact pattern from the list below.
+4. If the user did not already name exactly one pattern, ask them to choose with a structured ask-user-input, user-input, or human-in-the-loop tool that can show all nine patterns as selectable options. If no available tool can show all nine, ask in chat and list every pattern.
+5. Do not present fewer than nine options. Do not replace the patterns with generic presets such as `Single-Agent Loop`, `Planner -> Executor`, `Planner -> Executor -> Reviewer`, `Specialist Router`, or `Custom`. Do not include `Custom` unless the user explicitly asks for a custom pattern.
+6. On confirmed recreate, delete the existing `.agent-world/prompts/` directory before writing the new generated prompt files. Do not delete unrelated files under `.agent-world/`, such as request/result handoff files, state files, registry files, or user-owned notes.
+7. Write the generated world bundle: `.agent-world/world.json`, `.agent-world/world.schema.json`, and `.agent-world/prompts/<agent>.md` for each generated agent prompt.
+8. Use the cwd basename, normalized to kebab-case, as `world.id` and `world.name` unless the user gave a better name.
+9. Include `"$schema": "./world.schema.json"` in `world.json`. Agent entries must use `promptPath`, not inline prompt text.
+10. Report the created path and selected pattern. Do not run the router unless the user also asked to start using the world.
+
+Supported workflow patterns:
+
+- **Broadcast**: a human/world message with no paragraph-start mention can wake all eligible active agents.
+- **Direct handoff**: one agent or human routes to one specific agent with a paragraph-start mention.
+- **Multi-agent fan-out**: one message wakes multiple lanes with multiple paragraph-start mentions.
+- **Fan-in / collector**: multiple agents report to a collector, which merges results and returns to the human.
+- **Sequential pipeline**: agents proceed in order, such as spec -> build -> test -> review.
+- **Intent router**: one router classifies the request and mentions exactly one specialist.
+- **FSM / state-token workflow**: agents carry state tokens such as `[STATE=PLAN]` and route by state.
+- **Debate / ping-pong loop**: two agents alternate with explicit mentions until a stop condition.
+- **Orchestrator-worker**: a controller delegates to workers, then a synthesizer merges results.
 
 ## Start Or Continue
 

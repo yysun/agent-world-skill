@@ -33,7 +33,7 @@ The agents do not directly run shell commands or edit files. They request host a
 - `world.example.json`: a sample world definition with product, architecture, implementation, QA, and security agents.
 - `world.schema.json`: the JSON Schema for generated `.agent-world/world.json` files.
 - `prompts/`: sample prompt files referenced by `world.example.json`.
-- `init-agent-world.md`: the setup process for creating a new `.agent-world/world.json` from a selected messaging pattern.
+- `init-agent-world.md`: human-readable init reference. Runtime init instructions are in `SKILL.md` so agents do not need to open a second file.
 - `mention-routing-rules.md`: the standalone mention-routing rule reference.
 - `tests/agent-world-router.test.js`: router tests.
 
@@ -184,7 +184,7 @@ You can still start manually by copying `world.example.json` to `.agent-world/wo
 
 ## Creating A World
 
-Creation is separate from execution. When the user says something like `create agent world`, `init agent-world`, or `set up world.json`, Codex should follow `init-agent-world.md` instead of starting the router loop.
+Creation is separate from execution. When the user says something like `create agent world`, `init agent-world`, or `set up world.json`, Codex should follow the self-contained init process in `SKILL.md` instead of starting the router loop. `init-agent-world.md` mirrors that process for humans.
 
 The init process:
 
