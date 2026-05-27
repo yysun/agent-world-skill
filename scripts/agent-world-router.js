@@ -3,10 +3,11 @@
   Generic Agent World router.
 
   The router is deliberately not an agent executor. It loads agents and the
-  workflow graph from agent-world.yaml, persists messages, parses handoff
+  workflow graph from .agent-world/world.json, persists messages, parses handoff
   mentions / host actions, and returns the next instruction for the host executor.
 
   Recent changes:
+  - Switched world config loading to strict JSON plus external prompt files.
   - Added file-based request/result handoff so stdout can stay status-only.
   - Mention parsing now normalizes documented @mention forms before DAG routing.
   - World TO / completion tags and mainAgent fallback feed the same workflow checks.
@@ -17,7 +18,7 @@ const path = require('path');
 
 const ROUTER_COMMAND = 'node "$ROUTER"';
 const DEFAULT_STATE_PATH = process.env.AGENT_WORLD_STATE || path.join(process.cwd(), '.agent-world', 'agent-world-state.json');
-const DEFAULT_CONFIG_PATH = process.env.AGENT_WORLD_CONFIG || path.join(process.cwd(), 'agent-world.yaml');
+const DEFAULT_CONFIG_PATH = process.env.AGENT_WORLD_CONFIG || path.join(process.cwd(), '.agent-world', 'world.json');
 let activeStatePath = DEFAULT_STATE_PATH;
 
 function now() {
@@ -58,163 +59,21 @@ function parseArgs(argv) {
   return out;
 }
 
-function yamlIndent(line) {
-  const match = line.match(/^ */);
-  return match ? match[0].length : 0;
-}
-
-function parseScalar(raw) {
-  const value = raw.trim();
-  if (value === '') return '';
-  if (value === 'true') return true;
-  if (value === 'false') return false;
-  if (value === 'null') return null;
-  if (/^-?\d+(\.\d+)?$/.test(value)) return Number(value);
-  if ((value.startsWith('"') && value.endsWith('"')) || (value.startsWith("'") && value.endsWith("'"))) {
-    return value.slice(1, -1);
-  }
-  if (value.startsWith('[') && value.endsWith(']')) {
-    const body = value.slice(1, -1).trim();
-    if (!body) return [];
-    return body.split(',').map(item => parseScalar(item.trim()));
-  }
-  return value;
-}
-
-function parseYaml(text) {
-  const lines = text.replace(/\t/g, '  ').split(/\r?\n/);
-  let index = 0;
-
-  function skipBlank() {
-    while (index < lines.length && (/^\s*$/.test(lines[index]) || /^\s*#/.test(lines[index]))) index++;
-  }
-
-  function parseKeyValue(trimmed, lineNumber) {
-    const match = trimmed.match(/^([A-Za-z0-9_-]+):(?:\s*(.*))?$/);
-    if (!match) throw new Error(`Unsupported YAML syntax near line ${lineNumber}: ${trimmed}`);
-    return { key: match[1], rest: match[2] || '' };
-  }
-
-  function collectBlockScalar(parentIndent, folded) {
-    const block = [];
-    while (index < lines.length) {
-      const blockLine = lines[index];
-      if (/^\s*$/.test(blockLine)) {
-        block.push('');
-        index++;
-        continue;
-      }
-      const blockIndent = yamlIndent(blockLine);
-      if (blockIndent <= parentIndent) break;
-      block.push(blockLine.slice(Math.min(blockIndent, parentIndent + 2)));
-      index++;
-    }
-    return folded ? block.join(' ').replace(/\s+/g, ' ').trim() : block.join('\n').trimEnd();
-  }
-
-  function parseBlock(indent) {
-    skipBlank();
-    if (index >= lines.length) return {};
-    const trimmed = lines[index].trim();
-    if (yamlIndent(lines[index]) === indent && trimmed.startsWith('- ')) return parseSeq(indent);
-    return parseMap(indent);
-  }
-
-  function parseValue(rest, currentIndent) {
-    if (rest === '|' || rest === '>') return collectBlockScalar(currentIndent, rest === '>');
-    if (rest !== '') return parseScalar(rest);
-    return parseBlock(currentIndent + 2);
-  }
-
-  function parseSeq(indent) {
-    const out = [];
-    while (index < lines.length) {
-      skipBlank();
-      if (index >= lines.length) break;
-      const line = lines[index];
-      const currentIndent = yamlIndent(line);
-      const trimmed = line.trim();
-      if (currentIndent < indent) break;
-      if (currentIndent !== indent || !trimmed.startsWith('- ')) break;
-
-      const rest = trimmed.slice(2).trim();
-      index++;
-
-      if (rest === '') {
-        out.push(parseBlock(indent + 2));
-        continue;
-      }
-
-      if (/^[A-Za-z0-9_-]+:/.test(rest)) {
-        const item = {};
-        const first = parseKeyValue(rest, index);
-        item[first.key] = parseValue(first.rest, indent);
-
-        while (index < lines.length) {
-          skipBlank();
-          if (index >= lines.length) break;
-          const childLine = lines[index];
-          const childIndent = yamlIndent(childLine);
-          const childTrimmed = childLine.trim();
-          if (childIndent <= indent) break;
-          if (childIndent !== indent + 2 || childTrimmed.startsWith('- ')) break;
-          const child = parseKeyValue(childTrimmed, index + 1);
-          index++;
-          item[child.key] = parseValue(child.rest, childIndent);
-        }
-
-        out.push(item);
-        continue;
-      }
-
-      out.push(parseScalar(rest));
-    }
-    return out;
-  }
-
-  function parseMap(indent) {
-    const out = {};
-    while (index < lines.length) {
-      skipBlank();
-      if (index >= lines.length) break;
-
-      const line = lines[index];
-      const currentIndent = yamlIndent(line);
-      if (currentIndent < indent) break;
-      if (currentIndent > indent) {
-        throw new Error(`Invalid YAML indentation near line ${index + 1}: ${line}`);
-      }
-
-      const { key, rest } = parseKeyValue(line.trim(), index + 1);
-      index++;
-      out[key] = parseValue(rest, currentIndent);
-    }
-    return out;
-  }
-
-  return parseBlock(0);
-}
-
 function asArray(value) {
   if (value === undefined || value === null) return [];
   return Array.isArray(value) ? value : [value];
 }
 
 function readPrompt(configDir, agent) {
-  if (agent.systemPrompt) return agent.systemPrompt;
-  if (agent.promptText) return agent.promptText;
-
-  const promptPath = agent.prompt || agent.promptPath || agent.systemPromptPath;
-  if (promptPath) {
-    const absolutePromptPath = path.resolve(configDir, promptPath);
-    if (fs.existsSync(absolutePromptPath)) {
-      return fs.readFileSync(absolutePromptPath, 'utf8').trimEnd();
-    }
+  const promptPath = agent.promptPath;
+  if (!promptPath) {
+    throw new Error(`Invalid Agent World config:\n- agents.${agent.id} is missing promptPath`);
   }
-
-  return `You are @${agent.name || agent.id}, the ${agent.role || 'agent'} in a host-driven Agent World workflow.
-
-Follow the workflow node instruction, use paragraph-start @mentions for handoffs, and do not execute tools during an agent turn. If host work is needed, emit an agent-world-host-action JSON block.`;
+  const absolutePromptPath = path.resolve(configDir, promptPath);
+  if (!fs.existsSync(absolutePromptPath)) {
+    throw new Error(`Invalid Agent World config:\n- agents.${agent.id}.promptPath not found: ${promptPath}`);
+  }
+  return fs.readFileSync(absolutePromptPath, 'utf8').trimEnd();
 }
 
 function normalizeAgents(parsed, configPath) {
@@ -343,7 +202,12 @@ function loadConfig(configPath = DEFAULT_CONFIG_PATH) {
   if (!fs.existsSync(configPath)) {
     throw new Error(`Missing Agent World config: ${configPath}`);
   }
-  const parsed = parseYaml(fs.readFileSync(configPath, 'utf8'));
+  let parsed;
+  try {
+    parsed = JSON.parse(fs.readFileSync(configPath, 'utf8'));
+  } catch (err) {
+    throw new Error(`Invalid Agent World JSON config at ${configPath}: ${err.message}`);
+  }
   const agents = normalizeAgents(parsed, configPath);
   const workflow = normalizeWorkflow(parsed, agents);
 
@@ -897,7 +761,7 @@ function buildAgentInstruction(state, turn) {
   const handoff = handoffFilePair(`turn-${turn.id}`);
   const promptForHost = `You are executing exactly one Agent World turn as @${agent.name}.
 
-The router selected @${agent.name} from agent-world.yaml. The router only provides this dynamic instruction: the selected agent's system prompt, workflow node, allowed next workflow nodes, and persisted context. Your job is to run that prompt once and produce @${agent.name}'s message.
+The router selected @${agent.name} from .agent-world/world.json. The router only provides this dynamic instruction: the selected agent's system prompt, workflow node, allowed next workflow nodes, and persisted context. Your job is to run that prompt once and produce @${agent.name}'s message.
 
 Use this as your system prompt for this one turn:
 
@@ -1265,7 +1129,7 @@ State path:
 
 Host loop:
   1. Resolve ROUTER relative to the skill folder: scripts/agent-world-router.js
-  2. Run from the project/world cwd containing agent-world.yaml
+  2. Run from the project/world cwd containing .agent-world/world.json
   3. Write .agent-world/request-<timestamp>.json with command and content.
   4. Run node "$ROUTER" file --request .agent-world/request-<timestamp>.json --result .agent-world/result-<timestamp>.json
   5. Read .agent-world/result-<timestamp>.json and execute exactly one returned instruction as the host executor.
@@ -1337,7 +1201,6 @@ if (require.main === module) {
 }
 
 module.exports = {
-  parseYaml,
   loadConfig,
   validateConfig
 };

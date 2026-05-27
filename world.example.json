@@ -1,0 +1,73 @@
+{
+  "$schema": "./world.schema.json",
+  "world": {
+    "id": "app-builder",
+    "name": "app-builder",
+    "stopToken": "<world>pass</world>",
+    "turnLimit": 16,
+    "mode": "host_delegated"
+  },
+  "workflow": {
+    "type": "dag",
+    "entry": "requirements",
+    "entryAgent": "pm",
+    "enforceEdges": true,
+    "nodes": {
+      "requirements": {
+        "agent": "pm",
+        "instruction": "Turn the request into a short product brief and hand off to architecture."
+      },
+      "architecture": {
+        "agent": "architect",
+        "instruction": "Produce the minimal technical design and hand off to implementation."
+      },
+      "implementation": {
+        "agent": "dev",
+        "instruction": "Request host actions for implementation work, then hand off to review."
+      },
+      "qa_review": {
+        "agent": "qa",
+        "instruction": "Review correctness and runnable flow."
+      },
+      "security_review": {
+        "agent": "sec",
+        "instruction": "Review security posture and risky defaults."
+      },
+      "final": {
+        "agent": "pm",
+        "requires": ["qa_review", "security_review"],
+        "instruction": "Synthesize the result after required reviews and end with the stop token."
+      }
+    },
+    "edges": {
+      "requirements": ["architecture"],
+      "architecture": ["implementation"],
+      "implementation": ["qa_review", "security_review"],
+      "qa_review": ["final"],
+      "security_review": ["final"],
+      "final": []
+    }
+  },
+  "agents": {
+    "pm": {
+      "role": "product_manager_controller",
+      "promptPath": "prompts/pm.md"
+    },
+    "architect": {
+      "role": "software_architect",
+      "promptPath": "prompts/architect.md"
+    },
+    "dev": {
+      "role": "implementation_engineer",
+      "promptPath": "prompts/dev.md"
+    },
+    "qa": {
+      "role": "qa_reviewer",
+      "promptPath": "prompts/qa.md"
+    },
+    "sec": {
+      "role": "security_reviewer",
+      "promptPath": "prompts/sec.md"
+    }
+  }
+}

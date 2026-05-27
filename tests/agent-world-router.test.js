@@ -2,6 +2,7 @@
   Router test coverage for Agent World.
 
   Recent changes:
+  - Uses JSON world config and external prompt files.
   - Added file-based request/result handoff coverage.
   - Added coverage for documented @mention normalization and world tags.
   - DAG edge enforcement remains the compatibility boundary for routed mentions.
@@ -23,75 +24,107 @@ function testHandoffName(kind) {
   return `.agent-world/${kind}-20260102T030405${String(handoffCounter).padStart(3, '0')}Z.json`;
 }
 
+function writePromptFiles(worldDir, prompts) {
+  const promptsDir = path.join(worldDir, 'prompts');
+  fs.mkdirSync(promptsDir, { recursive: true });
+  for (const [name, content] of Object.entries(prompts)) {
+    fs.writeFileSync(path.join(promptsDir, `${name}.md`), content);
+  }
+}
+
+function writeWorldJson(configPath, config) {
+  fs.writeFileSync(configPath, JSON.stringify(config, null, 2));
+}
+
 function makeWorld(options = {}) {
   const turnLimit = options.turnLimit || 12;
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'agent-world-router-test-'));
-  fs.writeFileSync(path.join(dir, 'agent-world.yaml'), `
-world:
-  id: test-world
-  name: test-world
-  stopToken: "<world>pass</world>"
-  turnLimit: ${turnLimit}
-${options.mainAgent ? `  mainAgent: ${options.mainAgent}\n` : ''}
-
-workflow:
-  type: dag
-  entry: requirements
-  entryAgent: pm
-  enforceEdges: true
-  nodes:
-    requirements:
-      agent: pm
-      instruction: Write a brief and hand off.
-    architecture:
-      agent: architect
-      instruction: Design and hand off.
-    implementation:
-      agent: dev
-      instruction: Request implementation host work.
-    qa_review:
-      agent: qa
-      instruction: Review quality.
-    security_review:
-      agent: sec
-      instruction: Review security.
-    final:
-      agent: pm
-      requires: [qa_review, security_review]
-      instruction: Finish after both reviews.
-  edges:
-    requirements: [architecture]
-    architecture: ${options.architectureCanReturnToRequirements ? '[implementation, requirements]' : '[implementation]'}
-    implementation: [qa_review, security_review]
-    qa_review: [final]
-    security_review: [final]
-    final: []
-
-agents:
-  pm:
-    role: product_manager
-    systemPrompt: |
-      You are @pm in the test world.
-  architect:
-${options.displayNames ? '    name: Software Architect\n' : ''}
-    role: software_architect
-    systemPrompt: |
-      You are @architect in the test world.
-  dev:
-    role: implementation_engineer
-    systemPrompt: |
-      You are @dev in the test world.
-  qa:
-    role: qa_reviewer
-    systemPrompt: |
-      You are @qa in the test world.
-  sec:
-    role: security_reviewer
-    systemPrompt: |
-      You are @sec in the test world.
-`);
+  const worldDir = path.join(dir, '.agent-world');
+  const configPath = path.join(worldDir, 'world.json');
+  fs.mkdirSync(worldDir, { recursive: true });
+  writePromptFiles(worldDir, {
+    pm: 'You are @pm in the test world.',
+    architect: 'You are @architect in the test world.',
+    dev: 'You are @dev in the test world.',
+    qa: 'You are @qa in the test world.',
+    sec: 'You are @sec in the test world.'
+  });
+  writeWorldJson(configPath, {
+    world: {
+      id: 'test-world',
+      name: 'test-world',
+      stopToken: '<world>pass</world>',
+      turnLimit,
+      ...(options.mainAgent ? { mainAgent: options.mainAgent } : {})
+    },
+    workflow: {
+      type: 'dag',
+      entry: 'requirements',
+      entryAgent: 'pm',
+      enforceEdges: true,
+      nodes: {
+        requirements: {
+          agent: 'pm',
+          instruction: 'Write a brief and hand off.'
+        },
+        architecture: {
+          agent: 'architect',
+          instruction: 'Design and hand off.'
+        },
+        implementation: {
+          agent: 'dev',
+          instruction: 'Request implementation host work.'
+        },
+        qa_review: {
+          agent: 'qa',
+          instruction: 'Review quality.'
+        },
+        security_review: {
+          agent: 'sec',
+          instruction: 'Review security.'
+        },
+        final: {
+          agent: 'pm',
+          requires: ['qa_review', 'security_review'],
+          instruction: 'Finish after both reviews.'
+        }
+      },
+      edges: {
+        requirements: ['architecture'],
+        architecture: options.architectureCanReturnToRequirements ? ['implementation', 'requirements'] : ['implementation'],
+        implementation: ['qa_review', 'security_review'],
+        qa_review: ['final'],
+        security_review: ['final'],
+        final: []
+      }
+    },
+    agents: {
+      pm: {
+        role: 'product_manager',
+        promptPath: 'prompts/pm.md'
+      },
+      architect: {
+        ...(options.displayNames ? { name: 'Software Architect' } : {}),
+        role: 'software_architect',
+        promptPath: 'prompts/architect.md'
+      },
+      dev: {
+        role: 'implementation_engineer',
+        promptPath: 'prompts/dev.md'
+      },
+      qa: {
+        role: 'qa_reviewer',
+        promptPath: 'prompts/qa.md'
+      },
+      sec: {
+        role: 'security_reviewer',
+        promptPath: 'prompts/sec.md'
+      }
+    }
+  });
   return {
     cwd: dir,
+    configPath,
     statePath: path.join(dir, '.state', 'router-state.json')
   };
 }
@@ -138,7 +171,7 @@ function runFile(world, request, options = {}) {
   const requestPath = path.join(world.cwd, requestName);
   const resultPath = path.join(world.cwd, resultName);
   fs.writeFileSync(requestPath, JSON.stringify({
-    configPath: path.join(world.cwd, 'agent-world.yaml'),
+    configPath: world.configPath,
     statePath: world.statePath,
     resultPath,
     ...request
@@ -171,7 +204,7 @@ function runFileWithDefaultResult(world, request) {
   fs.mkdirSync(handoffDir, { recursive: true });
   const requestPath = path.join(world.cwd, testHandoffName('request'));
   fs.writeFileSync(requestPath, JSON.stringify({
-    configPath: path.join(world.cwd, 'agent-world.yaml'),
+    configPath: world.configPath,
     statePath: world.statePath,
     ...request
   }, null, 2));
@@ -197,17 +230,37 @@ function runFileWithDefaultResult(world, request) {
   };
 }
 
-function makeInvalidWorld(configYaml) {
+function makeInvalidWorld(config) {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'agent-world-invalid-config-test-'));
-  fs.writeFileSync(path.join(dir, 'agent-world.yaml'), configYaml);
+  const worldDir = path.join(dir, '.agent-world');
+  const configPath = path.join(worldDir, 'world.json');
+  fs.mkdirSync(worldDir, { recursive: true });
+  writePromptFiles(worldDir, {
+    pm: 'PM'
+  });
+  writeWorldJson(configPath, config);
   return {
     cwd: dir,
+    configPath,
     statePath: path.join(dir, '.state', 'router-state.json')
   };
 }
 
-function assertInvalidConfig(configYaml, expectedMessage) {
-  const world = makeInvalidWorld(configYaml);
+function makeRawConfigWorld(rawConfig) {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'agent-world-raw-config-test-'));
+  const worldDir = path.join(dir, '.agent-world');
+  const configPath = path.join(worldDir, 'world.json');
+  fs.mkdirSync(worldDir, { recursive: true });
+  fs.writeFileSync(configPath, rawConfig);
+  return {
+    cwd: dir,
+    configPath,
+    statePath: path.join(dir, '.state', 'router-state.json')
+  };
+}
+
+function assertInvalidConfig(config, expectedMessage) {
+  const world = makeInvalidWorld(config);
   const result = runRaw(world, ['reset']);
   assert.notEqual(result.status, 0, result.stdout);
   const error = JSON.parse(result.stderr);
@@ -216,11 +269,20 @@ function assertInvalidConfig(configYaml, expectedMessage) {
   assert.match(error.error, expectedMessage);
 }
 
-test('unit: loads agent-world.yaml from cwd and returns the configured entry agent', () => {
+test('config loading: rejects non-JSON world config', () => {
+  const world = makeRawConfigWorld('workflow:\n  entry: start\n');
+  const result = runRaw(world, ['reset']);
+  assert.notEqual(result.status, 0, result.stdout);
+  const error = JSON.parse(result.stderr);
+  assert.equal(error.type, 'error');
+  assert.match(error.error, /Invalid Agent World JSON config/);
+});
+
+test('unit: loads .agent-world/world.json from cwd and returns the configured entry agent', () => {
   const world = makeWorld();
 
   const reset = run(world, ['reset']);
-  assert.equal(fs.realpathSync(reset.configPath), fs.realpathSync(path.join(world.cwd, 'agent-world.yaml')));
+  assert.equal(fs.realpathSync(reset.configPath), fs.realpathSync(world.configPath));
 
   const next = run(world, ['user', '--stdin'], 'build an electron app');
   assert.equal(next.type, 'agent_instruction');
@@ -580,77 +642,126 @@ test('regression: off-edge agent mentions return a blocked routing result', () =
 });
 
 test('config validation: rejects missing entry node', () => {
-  assertInvalidConfig(`
-workflow:
-  entry: missing
-  nodes:
-    start:
-      agent: pm
-  edges:
-    start: []
-agents:
-  pm:
-    systemPrompt: PM
-`, /workflow\.entry "missing" does not match a workflow node/);
+  assertInvalidConfig({
+    workflow: {
+      entry: 'missing',
+      nodes: {
+        start: {
+          agent: 'pm'
+        }
+      },
+      edges: {
+        start: []
+      }
+    },
+    agents: {
+      pm: {
+        promptPath: 'prompts/pm.md'
+      }
+    }
+  }, /workflow\.entry "missing" does not match a workflow node/);
 });
 
 test('config validation: rejects missing node agent', () => {
-  assertInvalidConfig(`
-workflow:
-  entry: start
-  nodes:
-    start:
-      instruction: Missing agent.
-  edges:
-    start: []
-agents:
-  pm:
-    systemPrompt: PM
-`, /workflow\.nodes\.start is missing agent/);
+  assertInvalidConfig({
+    workflow: {
+      entry: 'start',
+      nodes: {
+        start: {
+          instruction: 'Missing agent.'
+        }
+      },
+      edges: {
+        start: []
+      }
+    },
+    agents: {
+      pm: {
+        promptPath: 'prompts/pm.md'
+      }
+    }
+  }, /workflow\.nodes\.start is missing agent/);
 });
 
 test('config validation: rejects edge to missing node', () => {
-  assertInvalidConfig(`
-workflow:
-  entry: start
-  nodes:
-    start:
-      agent: pm
-  edges:
-    start: [missing]
-agents:
-  pm:
-    systemPrompt: PM
-`, /workflow\.edges\.start references missing target node "missing"/);
+  assertInvalidConfig({
+    workflow: {
+      entry: 'start',
+      nodes: {
+        start: {
+          agent: 'pm'
+        }
+      },
+      edges: {
+        start: ['missing']
+      }
+    },
+    agents: {
+      pm: {
+        promptPath: 'prompts/pm.md'
+      }
+    }
+  }, /workflow\.edges\.start references missing target node "missing"/);
 });
 
 test('config validation: rejects node agent missing from agents', () => {
-  assertInvalidConfig(`
-workflow:
-  entry: start
-  nodes:
-    start:
-      agent: missing_agent
-  edges:
-    start: []
-agents:
-  pm:
-    systemPrompt: PM
-`, /workflow\.nodes\.start\.agent "missing_agent" is not defined in agents/);
+  assertInvalidConfig({
+    workflow: {
+      entry: 'start',
+      nodes: {
+        start: {
+          agent: 'missing_agent'
+        }
+      },
+      edges: {
+        start: []
+      }
+    },
+    agents: {
+      pm: {
+        promptPath: 'prompts/pm.md'
+      }
+    }
+  }, /workflow\.nodes\.start\.agent "missing_agent" is not defined in agents/);
 });
 
 test('config validation: rejects requires missing node', () => {
-  assertInvalidConfig(`
-workflow:
-  entry: final
-  nodes:
-    final:
-      agent: pm
-      requires: [missing]
-  edges:
-    final: []
-agents:
-  pm:
-    systemPrompt: PM
-`, /workflow\.nodes\.final\.requires references missing node "missing"/);
+  assertInvalidConfig({
+    workflow: {
+      entry: 'final',
+      nodes: {
+        final: {
+          agent: 'pm',
+          requires: ['missing']
+        }
+      },
+      edges: {
+        final: []
+      }
+    },
+    agents: {
+      pm: {
+        promptPath: 'prompts/pm.md'
+      }
+    }
+  }, /workflow\.nodes\.final\.requires references missing node "missing"/);
+});
+
+test('config validation: rejects agents without promptPath', () => {
+  assertInvalidConfig({
+    workflow: {
+      entry: 'start',
+      nodes: {
+        start: {
+          agent: 'pm'
+        }
+      },
+      edges: {
+        start: []
+      }
+    },
+    agents: {
+      pm: {}
+    }
+  }, /agents\.pm is missing promptPath/);
 });

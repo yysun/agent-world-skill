@@ -4,7 +4,8 @@ Agent World is a way to run a small team of named agents without letting the cha
 
 Think of it as a traffic controller:
 
-- `agent-world.yaml` says who the agents are and what order they should work in.
+- `.agent-world/world.json` says who the agents are and what order they should work in.
+- `.agent-world/prompts/*.md` contains the agent system prompts.
 - `scripts/agent-world-router.js` reads that file, remembers the conversation, and decides the next step.
 - The host executor runs one returned instruction at a time.
 - Agents can ask the host to do real work, such as reading files, writing files, or running tests.
@@ -29,8 +30,10 @@ The agents do not directly run shell commands or edit files. They request host a
 
 - `SKILL.md`: instructions for Codex when it acts as the Agent World host executor.
 - `scripts/agent-world-router.js`: the router that loads the world, tracks state, and returns the next instruction.
-- `agent-world.example.yaml`: a sample world definition with product, architecture, implementation, QA, and security agents.
-- `init-agent-world.md`: the setup process for creating a new `agent-world.yaml` from a selected messaging pattern.
+- `world.example.json`: a sample world definition with product, architecture, implementation, QA, and security agents.
+- `world.schema.json`: the JSON Schema for generated `.agent-world/world.json` files.
+- `prompts/`: sample prompt files referenced by `world.example.json`.
+- `init-agent-world.md`: the setup process for creating a new `.agent-world/world.json` from a selected messaging pattern.
 - `mention-routing-rules.md`: the standalone mention-routing rule reference.
 - `tests/agent-world-router.test.js`: router tests.
 
@@ -42,7 +45,7 @@ Example flow:
 
 1. The human asks Codex: `Build an Electron app`.
 2. This skill tells Codex to send that exact message to `scripts/agent-world-router.js`.
-3. The router reads `agent-world.yaml`, sees that the workflow starts with `@pm`, and returns a dynamic instruction containing the `@pm` system prompt, workflow step, and conversation context.
+3. The router reads `.agent-world/world.json`, loads the referenced prompt file, sees that the workflow starts with `@pm`, and returns a dynamic instruction containing the `@pm` system prompt, workflow step, and conversation context.
 4. Codex follows that instruction and writes one message as `@pm`, such as a short product brief ending with:
 
    ```text
@@ -151,7 +154,7 @@ World tags refine routing:
 - `<world>TO:a,b</world>` replaces leading paragraph mentions with explicit normalized recipients.
 - `<world>STOP</world>`, `<world>DONE</world>`, `<world>PASS</world>`, and the configured `world.stopToken` complete the run and suppress further routing.
 
-The router owns all of this. Agents should mention the intended next target, but the YAML workflow decides whether that target can actually run.
+The router owns all of this. Agents should mention the intended next target, but the JSON workflow decides whether that target can actually run.
 
 ## Quick Start
 
@@ -165,9 +168,9 @@ The router owns all of this. Agents should mention the intended next target, but
 
    Short command forms such as `agent-world: init` and `agent-world init` mean the same thing. They are not tool calls.
 
-   Codex should ask which messaging workflow you want using a user-input or human-in-the-loop tool that can show all nine workflow patterns. If no suitable tool is available, it should ask in chat and list every pattern. It must not compress, rename, replace, or add workflow choices. After you choose, it writes `agent-world.yaml` in the current working directory with sample agents and a matching workflow.
+   Codex should ask which messaging workflow you want using a user-input or human-in-the-loop tool that can show all nine workflow patterns. If no suitable tool is available, it should ask in chat and list every pattern. It must not compress, rename, replace, or add workflow choices. After you choose, it writes `.agent-world/world.json`, `.agent-world/world.schema.json`, and `.agent-world/prompts/*.md` with sample agents and a matching workflow.
 
-   If `agent-world.yaml` already exists, Codex must ask before overwriting it.
+   If `.agent-world/world.json` already exists, Codex must ask whether to recreate and overwrite it. If recreating, Codex must ask for the workflow again from the nine options.
 
 3. Ask the agent app for the work you want:
 
@@ -177,17 +180,17 @@ The router owns all of this. Agents should mention the intended next target, but
 
 The skill should route the request through the router script. Codex will then run the first selected agent, send that agent's response back to the router, and continue through the workflow.
 
-You can still start manually by copying `agent-world.example.yaml` and editing the agents, prompts, and workflow yourself. The init flow is the safer default because it forces the workflow choice up front.
+You can still start manually by copying `world.example.json` to `.agent-world/world.json`, `world.schema.json` to `.agent-world/world.schema.json`, and `prompts/` to `.agent-world/prompts/`. The init flow is the safer default because it forces the workflow choice up front.
 
 ## Creating A World
 
-Creation is separate from execution. When the user says something like `create agent world`, `init agent-world`, or `set up agent-world.yaml`, Codex should follow `init-agent-world.md` instead of starting the router loop.
+Creation is separate from execution. When the user says something like `create agent world`, `init agent-world`, or `set up world.json`, Codex should follow `init-agent-world.md` instead of starting the router loop.
 
 The init process:
 
-1. Checks whether `agent-world.yaml` already exists in the current working directory.
-2. Asks for overwrite confirmation if the file exists.
-3. Asks the user to choose one workflow pattern, using a user-input or human-in-the-loop tool that can show every option when available:
+1. Checks whether `.agent-world/world.json` already exists under the current working directory.
+2. Asks whether to recreate and overwrite if the file exists.
+3. On first create or confirmed recreate, asks the user to choose one workflow pattern, using a user-input or human-in-the-loop tool that can show every option when available:
    - Broadcast
    - Direct handoff
    - Multi-agent fan-out
@@ -198,11 +201,11 @@ The init process:
    - Debate / ping-pong loop
    - Orchestrator-worker
    If the user has not already named one of these patterns, creation stops here until they choose. Agent World should not infer or default the workflow type.
-4. Writes a valid `agent-world.yaml` with sample agents, prompts, edges, and stop behavior for the selected pattern.
+4. Writes a valid `.agent-world/world.json` with sample agents, prompt paths, edges, and stop behavior for the selected pattern, plus `.agent-world/world.schema.json` and matching `.agent-world/prompts/*.md` files.
 5. Stops after creation unless the user also asks to run the world.
 
 ## The Short Version
 
 Agent World turns a loose multi-agent conversation into a controlled workflow.
 
-The YAML file defines the team and path. The router remembers state and chooses the next step. The host executes only what the router returns.
+The JSON file defines the team and path. Prompt files carry the long instructions. The router remembers state and chooses the next step. The host executes only what the router returns.

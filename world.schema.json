@@ -1,0 +1,172 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://agent-world.local/world.schema.json",
+  "title": "Agent World Config",
+  "description": "Schema for .agent-world/world.json. It validates the config shape; the router still validates graph references and prompt file existence at runtime.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["world", "workflow", "agents"],
+  "properties": {
+    "$schema": {
+      "type": "string"
+    },
+    "world": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "name"],
+      "properties": {
+        "id": {
+          "$ref": "#/$defs/id"
+        },
+        "name": {
+          "type": "string",
+          "minLength": 1
+        },
+        "entryAgent": {
+          "$ref": "#/$defs/id"
+        },
+        "mainAgent": {
+          "$ref": "#/$defs/id"
+        },
+        "stopToken": {
+          "type": "string",
+          "default": "<world>pass</world>"
+        },
+        "turnLimit": {
+          "type": "integer",
+          "minimum": 1,
+          "default": 30
+        },
+        "mode": {
+          "type": "string",
+          "enum": ["host_driven_router_only", "host_delegated"],
+          "default": "host_driven_router_only"
+        }
+      }
+    },
+    "workflow": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["entry", "entryAgent", "nodes", "edges"],
+      "properties": {
+        "type": {
+          "type": "string",
+          "enum": ["dag", "mention_graph"],
+          "default": "dag"
+        },
+        "entry": {
+          "$ref": "#/$defs/id"
+        },
+        "entryAgent": {
+          "$ref": "#/$defs/id"
+        },
+        "enforceEdges": {
+          "type": "boolean",
+          "default": true
+        },
+        "nodes": {
+          "type": "object",
+          "minProperties": 1,
+          "propertyNames": {
+            "$ref": "#/$defs/id"
+          },
+          "additionalProperties": {
+            "$ref": "#/$defs/workflowNode"
+          }
+        },
+        "edges": {
+          "type": "object",
+          "propertyNames": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/id"
+              },
+              {
+                "const": "human"
+              }
+            ]
+          },
+          "additionalProperties": {
+            "type": "array",
+            "items": {
+              "$ref": "#/$defs/id"
+            },
+            "uniqueItems": true
+          }
+        }
+      }
+    },
+    "routing": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "noMentionFromHumanGoesTo": {
+          "$ref": "#/$defs/id"
+        },
+        "stopToken": {
+          "type": "string"
+        }
+      }
+    },
+    "agents": {
+      "type": "object",
+      "minProperties": 1,
+      "propertyNames": {
+        "$ref": "#/$defs/id"
+      },
+      "additionalProperties": {
+        "$ref": "#/$defs/agent"
+      }
+    }
+  },
+  "$defs": {
+    "id": {
+      "type": "string",
+      "pattern": "^[A-Za-z0-9_-]+$",
+      "minLength": 1
+    },
+    "path": {
+      "type": "string",
+      "minLength": 1,
+      "pattern": "^[^\\u0000]+$"
+    },
+    "workflowNode": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["agent"],
+      "properties": {
+        "agent": {
+          "$ref": "#/$defs/id"
+        },
+        "instruction": {
+          "type": "string"
+        },
+        "requires": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/id"
+          },
+          "uniqueItems": true
+        }
+      }
+    },
+    "agent": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["promptPath"],
+      "properties": {
+        "name": {
+          "type": "string",
+          "minLength": 1
+        },
+        "role": {
+          "type": "string",
+          "minLength": 1
+        },
+        "promptPath": {
+          "$ref": "#/$defs/path"
+        }
+      }
+    }
+  }
+}

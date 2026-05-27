@@ -2,7 +2,7 @@
   End-to-end mention routing coverage for the Agent World router CLI.
 
   These tests drive the router as a separate process with a real temporary
-  agent-world.yaml and persisted state file. They verify complete routing
+  .agent-world/world.json and persisted state file. They verify complete routing
   outcomes instead of only parser-level behavior.
 */
 
@@ -16,79 +16,103 @@ const test = require('node:test');
 const skillRoot = path.resolve(__dirname, '..');
 const router = path.join(skillRoot, 'scripts', 'agent-world-router.js');
 
+function writePromptFiles(worldDir, prompts) {
+  const promptsDir = path.join(worldDir, 'prompts');
+  fs.mkdirSync(promptsDir, { recursive: true });
+  for (const [name, content] of Object.entries(prompts)) {
+    fs.writeFileSync(path.join(promptsDir, `${name}.md`), content);
+  }
+}
+
 function makeWorld(options = {}) {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'agent-world-mention-e2e-'));
-  const enforceEdges = options.enforceEdges === false ? 'false' : 'true';
-  const humanEdges = options.humanEdges ? `    human: ${options.humanEdges}\n` : '';
-  const architectureEdges = options.architectureCanReturnToIntake ? '[implementation, intake]' : '[implementation]';
-  fs.writeFileSync(path.join(dir, 'agent-world.yaml'), `
-world:
-  id: mention-e2e
-  name: mention-e2e
-  stopToken: "${options.stopToken || '<world>pass</world>'}"
-  turnLimit: 20
-${options.mainAgent ? `  mainAgent: ${options.mainAgent}\n` : ''}
-
-workflow:
-  type: dag
-  entry: intake
-  entryAgent: pm
-  enforceEdges: ${enforceEdges}
-  nodes:
-    intake:
-      agent: pm
-      instruction: Clarify the request.
-    architecture:
-      agent: architect
-      instruction: Design the routing flow.
-    implementation:
-      agent: dev
-      instruction: Request host work, then fan out to reviewers.
-    qa_review:
-      agent: qa
-      instruction: Review correctness.
-    security_review:
-      agent: sec
-      instruction: Review security.
-    final:
-      agent: pm
-      requires: [qa_review, security_review]
-      instruction: Finish after both reviews.
-  edges:
-${humanEdges}    intake: [architecture]
-    architecture: ${architectureEdges}
-    implementation: [qa_review, security_review]
-    qa_review: [final]
-    security_review: [final]
-    final: []
-
-agents:
-  pm:
-    name: Coordinator
-    role: controller
-    systemPrompt: |
-      You are @Coordinator.
-  architect:
-    name: Madame Pedagogue
-    role: architect
-    systemPrompt: |
-      You are @Madame Pedagogue.
-  dev:
-    name: Build Dev
-    role: developer
-    systemPrompt: |
-      You are @Build Dev.
-  qa:
-    name: Review Captain
-    role: qa
-    systemPrompt: |
-      You are @Review Captain.
-  sec:
-    name: Security Chief
-    role: security
-    systemPrompt: |
-      You are @Security Chief.
-`);
+  const worldDir = path.join(dir, '.agent-world');
+  fs.mkdirSync(worldDir, { recursive: true });
+  writePromptFiles(worldDir, {
+    pm: 'You are @Coordinator.',
+    architect: 'You are @Madame Pedagogue.',
+    dev: 'You are @Build Dev.',
+    qa: 'You are @Review Captain.',
+    sec: 'You are @Security Chief.'
+  });
+  fs.writeFileSync(path.join(worldDir, 'world.json'), JSON.stringify({
+    world: {
+      id: 'mention-e2e',
+      name: 'mention-e2e',
+      stopToken: options.stopToken || '<world>pass</world>',
+      turnLimit: 20,
+      ...(options.mainAgent ? { mainAgent: options.mainAgent } : {})
+    },
+    workflow: {
+      type: 'dag',
+      entry: 'intake',
+      entryAgent: 'pm',
+      enforceEdges: options.enforceEdges !== false,
+      nodes: {
+        intake: {
+          agent: 'pm',
+          instruction: 'Clarify the request.'
+        },
+        architecture: {
+          agent: 'architect',
+          instruction: 'Design the routing flow.'
+        },
+        implementation: {
+          agent: 'dev',
+          instruction: 'Request host work, then fan out to reviewers.'
+        },
+        qa_review: {
+          agent: 'qa',
+          instruction: 'Review correctness.'
+        },
+        security_review: {
+          agent: 'sec',
+          instruction: 'Review security.'
+        },
+        final: {
+          agent: 'pm',
+          requires: ['qa_review', 'security_review'],
+          instruction: 'Finish after both reviews.'
+        }
+      },
+      edges: {
+        ...(options.humanEdges ? { human: options.humanEdges } : {}),
+        intake: ['architecture'],
+        architecture: options.architectureCanReturnToIntake ? ['implementation', 'intake'] : ['implementation'],
+        implementation: ['qa_review', 'security_review'],
+        qa_review: ['final'],
+        security_review: ['final'],
+        final: []
+      }
+    },
+    agents: {
+      pm: {
+        name: 'Coordinator',
+        role: 'controller',
+        promptPath: 'prompts/pm.md'
+      },
+      architect: {
+        name: 'Madame Pedagogue',
+        role: 'architect',
+        promptPath: 'prompts/architect.md'
+      },
+      dev: {
+        name: 'Build Dev',
+        role: 'developer',
+        promptPath: 'prompts/dev.md'
+      },
+      qa: {
+        name: 'Review Captain',
+        role: 'qa',
+        promptPath: 'prompts/qa.md'
+      },
+      sec: {
+        name: 'Security Chief',
+        role: 'security',
+        promptPath: 'prompts/sec.md'
+      }
+    }
+  }, null, 2));
   return {
     cwd: dir,
     statePath: path.join(dir, '.state', 'router-state.json')
@@ -269,7 +293,7 @@ test('e2e: human no-mention falls back to workflow entry when mainAgent is absen
 });
 
 test('e2e: human edges restrict direct mentioned entry into a non-human node', () => {
-  const world = makeWorld({ humanEdges: '[intake]' });
+  const world = makeWorld({ humanEdges: ['intake'] });
 
   run(world, ['reset']);
   const output = run(world, ['user', '--stdin'], '@Madame Pedagogue\nTry to skip intake.');
@@ -281,7 +305,7 @@ test('e2e: human edges restrict direct mentioned entry into a non-human node', (
 });
 
 test('e2e: human edges allow direct mentioned entry when the node is listed', () => {
-  const world = makeWorld({ humanEdges: '[architecture]' });
+  const world = makeWorld({ humanEdges: ['architecture'] });
 
   run(world, ['reset']);
   const output = run(world, ['user', '--stdin'], '@Madame Pedagogue\nDesign directly.');

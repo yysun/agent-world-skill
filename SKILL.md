@@ -1,6 +1,6 @@
 ---
 name: agent-world-skill
-description: Use when the user intends to create, initialize, run, continue, route, inspect, or debug an Agent World workflow, including requests that mention Agent World, agent-world, agent world, agent-world.yaml, or command-like forms such as agent-world: init. Treat command-like forms as natural-language requests, not tool calls.
+description: Use when the user intends to create, initialize, run, continue, route, inspect, or debug an Agent World workflow, including requests that mention Agent World, agent-world, agent world, world.json, or command-like forms such as agent-world: init. Treat command-like forms as natural-language requests, not tool calls.
 ---
 
 # Agent World Skill
@@ -11,8 +11,9 @@ You are the host executor for Agent World.
 
 Agent World owns:
 
-- agent definitions and system prompts in `agent-world.yaml`
-- the DAG workflow in `agent-world.yaml`
+- agent definitions and the DAG workflow in `.agent-world/world.json`
+- the config schema in `.agent-world/world.schema.json`
+- system prompts in `.agent-world/prompts/*.md`
 - message persistence
 - paragraph-start `@mention` routing
 - pending agent turns
@@ -33,15 +34,15 @@ Do not route `@mentions` yourself. Do not choose the next agent yourself. Do not
 
 ```bash
 ROUTER="scripts/agent-world-router.js"
-WORLD="agent-world.yaml"
+WORLD=".agent-world/world.json"
 ```
 
 These paths have different bases:
 
 - `ROUTER` is skill-relative. Resolve `scripts/agent-world-router.js` against the directory containing this `SKILL.md`.
-- `WORLD` is project-relative. Resolve `agent-world.yaml` against the current working directory for the user's project/world.
+- `WORLD` is project-relative. Resolve `.agent-world/world.json` against the current working directory for the user's project/world.
 
-Run router commands from the project/world cwd so the router finds `WORLD` at `./agent-world.yaml`. If the world file is elsewhere, set `AGENT_WORLD_CONFIG` to that project-relative or absolute path. Do not copy or generate a `scripts/` folder into the project cwd.
+Run router commands from the project/world cwd so the router finds `WORLD` at `./.agent-world/world.json`. If the world file is elsewhere, set `AGENT_WORLD_CONFIG` to that project-relative or absolute path. Do not copy or generate a `scripts/` folder into the project cwd.
 
 ## Create Or Init Agent World
 
@@ -49,7 +50,7 @@ When the user asks to create, initialize, init, scaffold, or set up an Agent Wor
 
 Treat shorthand command forms such as `agent-world: init`, `agent-world init`, `agent-world:init`, `agent world init`, and `init agent-world` as init requests. These are not requests to call an `init` tool or function. Do not report `unknown_tool` for these forms; follow the init process below.
 
-Follow the skill-relative `init-agent-world.md` process. That process contains the only supported workflow patterns and has a hard workflow-selection gate: if the user has not already selected exactly one workflow pattern, ask them to choose one. Use a structured ask-user-input, user-input, or human-in-the-loop tool only when it can show all nine patterns as selectable options; otherwise ask in chat and list every pattern. Do not compress, rename, replace, or add workflow choices. Do not choose a default, infer a pattern, or write `agent-world.yaml` before that choice. The process also protects any existing `agent-world.yaml` before writing.
+Follow the skill-relative `init-agent-world.md` process. That process contains the only supported workflow patterns and has a hard workflow-selection gate: if the user has not already selected exactly one workflow pattern, ask them to choose one. Use a structured ask-user-input, user-input, or human-in-the-loop tool only when it can show all nine patterns as selectable options; otherwise ask in chat and list every pattern. Do not compress, rename, replace, or add workflow choices. Do not choose a default, infer a pattern, or write `.agent-world/world.json` before that choice. The process also protects any existing `.agent-world/world.json` before writing.
 
 ## Start Or Continue
 
