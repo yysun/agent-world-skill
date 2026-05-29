@@ -22,10 +22,12 @@ Creation is host setup. Do not start the router loop until `.agent-world/world.j
 5. On confirmed recreate, delete the existing `.agent-world/prompts/` directory before writing the new generated prompt files. This prevents stale prompt files from surviving after agents are renamed, removed, or replaced. Do not delete unrelated files under `.agent-world/`, such as request/result handoff files, state files, registry files, or user-owned notes.
 6. After the user chooses, write a complete generated world bundle:
    - `.agent-world/world.json`
+   - `.agent-world/world.eval.md`
    - `.agent-world/prompts/<agent>.md` for each generated agent prompt
-7. Do not copy, generate, simplify, or rewrite `world.schema.json` into `.agent-world/`. The canonical schema stays skill-relative at `world.schema.json`; hosts and clients that validate worlds should load that skill schema directly.
-8. Use the cwd basename, normalized to kebab-case, as `world.id` and `world.name` unless the user gave a better name.
-9. Include these baseline settings unless the user requested different ones:
+7. The generated `world.eval.md` is the world contract. It must contain deterministic routing tests and optional semantic smoke tests for the selected workflow pattern.
+8. Do not copy, generate, simplify, or rewrite `world.schema.json` into `.agent-world/`. The canonical schema stays skill-relative at `world.schema.json`; hosts and clients that validate worlds should load that skill schema directly.
+9. Use the cwd basename, normalized to kebab-case, as `world.id` and `world.name` unless the user gave a better name.
+10. Include these baseline settings unless the user requested different ones:
 
    ```json
    {
@@ -39,16 +41,16 @@ Creation is host setup. Do not start the router loop until `.agent-world/world.j
    }
    ```
 
-10. Use the canonical object shape from `world.schema.json` and `world.example.json`:
+11. Use the canonical object shape from `world.schema.json` and `world.example.json`:
    - `agents` is an object keyed by agent id, not an array.
    - `workflow.nodes` is an object keyed by workflow node id, not an array.
    - `workflow.edges` is an object whose keys are source node ids or `human`, and whose values are arrays of target node ids.
    - Do not write `id` inside each agent or node object; the object key is the id.
    - Do not write edge objects such as `{ "from": "a", "to": "b" }`.
-11. Prefer `workflow.type: dag` and `workflow.enforceEdges: true`. For loop-shaped patterns, keep `turnLimit` conservative and make the stop condition explicit in prompts.
-12. Agent entries in `world.json` must use `promptPath`, not inline prompt text. Do not include `"$schema": "./world.schema.json"` in generated worlds unless a specific host/client owns that schema reference strategy.
-13. Agent prompts must tell agents to use paragraph-start `@mentions`, stay inside the workflow, never run tools directly, request host work with an `agent-world-host-action` JSON block, and end final responses with `<world>pass</world>`.
-14. Report the created path and selected pattern. Do not run the router unless the user also asked to start using the world.
+12. Prefer `workflow.type: dag` and `workflow.enforceEdges: true`. For loop-shaped patterns, keep `turnLimit` conservative and make the stop condition explicit in prompts.
+13. Agent entries in `world.json` must use `promptPath`, not inline prompt text. Do not include `"$schema": "./world.schema.json"` in generated worlds unless a specific host/client owns that schema reference strategy.
+14. Agent prompts must tell agents to use paragraph-start `@mentions`, stay inside the workflow, never run tools directly, request host work with an `agent-world-host-action` JSON block, and end final responses with `<world>pass</world>`.
+15. Report the created path, selected pattern, and generated eval contract path. Do not run the router unless the user also asked to start using the world.
 
 ## Workflow Patterns
 
@@ -86,3 +88,29 @@ Creation is host setup. Do not start the router loop until `.agent-world/world.j
 - `agents`, `workflow.nodes`, and `workflow.edges` are keyed objects, not arrays
 
 The skill-relative `world.schema.json` validates shape, required fields, primitive types, and allowed config keys. The router still validates graph references and prompt file existence because JSON Schema cannot reliably prove that every edge target, node reference, and prompt path exists.
+
+## Eval Contract Requirements
+
+Generated worlds must include `.agent-world/world.eval.md`. Treat it as a human-readable contract, not a log file.
+
+Every generated eval contract must include:
+
+- target config path
+- selected workflow pattern
+- deterministic config and prompt checks
+- routing cases expressed as fenced `json` objects
+- optional semantic smoke cases reported separately from deterministic checks
+
+Minimum deterministic routing coverage by selected pattern:
+
+| Pattern | Must test |
+| --- | --- |
+| Broadcast | Human message wakes intended agents; collector waits for required lanes. |
+| Direct handoff | Sender routes only to receiver; off-edge mention blocks. |
+| Multi-agent fan-out | One message queues multiple lanes. |
+| Fan-in / collector | Collector only runs after required nodes complete. |
+| Sequential pipeline | Each step routes to next; skipping blocks. |
+| Intent router | Router can only mention one valid specialist. |
+| FSM / state-token workflow | State token routes to the correct next node. |
+| Debate / ping-pong loop | Pro/con alternate; judge can stop; turn limit blocks runaway routing. |
+| Orchestrator-worker | Orchestrator delegates; synthesizer merges after workers. |

@@ -1,6 +1,6 @@
 ---
 name: agent-world-skill
-description: Use when the user intends to create, initialize, run, continue, route, inspect, or debug an Agent World workflow, including requests that mention Agent World, agent-world, agent world, world.json, or command-like forms such as agent-world: init. Treat command-like forms as natural-language requests, not tool calls.
+description: Use when the user intends to create, initialize, run, continue, route, eval, test, verify, validate, confirm, check, smoke-test, inspect, or debug an Agent World workflow, including requests that mention Agent World, agent-world, agent world, world.json, world.eval.md, or command-like forms such as agent-world: init. Treat command-like forms as natural-language requests, not tool calls.
 ---
 
 # Agent World Skill
@@ -12,6 +12,7 @@ You are the host executor for Agent World.
 Agent World owns:
 
 - agent definitions and the DAG workflow in `.agent-world/world.json`
+- deterministic eval contracts in `.agent-world/world.eval.md`
 - the config schema in the skill-relative `world.schema.json`
 - system prompts in `.agent-world/prompts/*.md`
 - message persistence
@@ -34,13 +35,16 @@ Do not route `@mentions` yourself. Do not choose the next agent yourself. Do not
 
 ```bash
 ROUTER="scripts/agent-world-router.js"
+EVAL_REF="eval-agent-world.md"
 WORLD=".agent-world/world.json"
+EVAL=".agent-world/world.eval.md"
 ```
 
 These paths have different bases:
 
 - `ROUTER` is skill-relative. Resolve `scripts/agent-world-router.js` against the directory containing this `SKILL.md`.
-- `WORLD` is project-relative. Resolve `.agent-world/world.json` against the current working directory for the user's project/world.
+- `EVAL_REF` is skill-relative. Resolve `eval-agent-world.md` against the directory containing this `SKILL.md`.
+- `WORLD` and `EVAL` are project-relative. Resolve `.agent-world/world.json` and `.agent-world/world.eval.md` against the current working directory for the user's project/world.
 
 Run router commands from the project/world cwd so the router finds `WORLD` at `./.agent-world/world.json`. If the world file is elsewhere, set `AGENT_WORLD_CONFIG` to that project-relative or absolute path. Do not copy or generate a `scripts/` folder into the project cwd.
 
@@ -53,6 +57,24 @@ Treat shorthand command forms such as `agent-world: init`, `agent-world init`, `
 Before doing any init work, load and follow the skill-relative reference file `init-agent-world.md`. Resolve it relative to the directory containing this `SKILL.md`, not relative to the user's project cwd. That file is the source of truth for creating `.agent-world/world.json`, handling recreate/overwrite confirmation, selecting exactly one of the nine workflow patterns, using the canonical skill-relative `world.schema.json` shape, and generating prompt files under `.agent-world/prompts/`.
 
 If `init-agent-world.md` cannot be read, stop and report that the Agent World skill installation is incomplete. Do not invent fallback workflow options, do not use generic presets, and do not create or overwrite `.agent-world/world.json`.
+
+## Eval Or Verify Agent World
+
+When the user asks to eval, test, verify, validate, confirm, check, or smoke-test whether the world config works, do not manually inspect only by reading. Load and follow the skill-relative reference file `eval-agent-world.md`. Resolve it relative to the directory containing this `SKILL.md`, not relative to the user's project cwd.
+
+Do not look for `.agent-world/eval-agent-world.md`. That path is invalid. The project-level eval contract is `.agent-world/world.eval.md`; if that file is missing, follow `eval-agent-world.md` and generate it from the current world config and selected workflow pattern.
+
+The deterministic eval confirms:
+
+- config validity
+- graph references
+- prompt file existence
+- prompt protocol requirements
+- router transitions
+- blocked invalid handoffs
+- stop-token completion
+
+Live semantic smoke tests are optional and must be reported separately from deterministic eval results.
 
 ## Start Or Continue
 

@@ -5,6 +5,7 @@ Agent World is a way to run a small team of named agents without letting the cha
 Think of it as a traffic controller:
 
 - `.agent-world/world.json` says who the agents are and what order they should work in.
+- `.agent-world/world.eval.md` says how to prove the generated world routes correctly.
 - `.agent-world/prompts/*.md` contains the agent system prompts.
 - `scripts/agent-world-router.js` reads that file, remembers the conversation, and decides the next step.
 - The host executor runs one returned instruction at a time.
@@ -30,12 +31,15 @@ The agents do not directly run shell commands or edit files. They request host a
 
 - `SKILL.md`: instructions for Codex when it acts as the Agent World host executor.
 - `scripts/agent-world-router.js`: the router that loads the world, tracks state, and returns the next instruction.
+- `scripts/agent-world-eval.js`: the deterministic eval harness that validates a generated world contract through the router.
 - `world.example.json`: a sample world definition with product, architecture, implementation, QA, and security agents.
 - `world.schema.json`: the skill-relative JSON Schema that hosts and clients can use to validate `.agent-world/world.json`.
 - `prompts/`: sample prompt files referenced by `world.example.json`.
 - `init-agent-world.md`: required init reference for creating `.agent-world/world.json` from a selected messaging pattern.
+- `eval-agent-world.md`: required eval reference for validating `.agent-world/world.eval.md`.
 - `mention-routing-rules.md`: the standalone mention-routing rule reference.
 - `tests/agent-world-router.test.js`: router tests.
+- `tests/agent-world-eval.test.js`: deterministic eval runner tests.
 
 ## How It Works
 
@@ -168,7 +172,7 @@ The router owns all of this. Agents should mention the intended next target, but
 
    Short command forms such as `agent-world: init` and `agent-world init` mean the same thing. They are not tool calls.
 
-   Codex should ask which messaging workflow you want using a user-input or human-in-the-loop tool that can show all nine workflow patterns. If no suitable tool is available, it should ask in chat and list every pattern. It must not compress, rename, replace, or add workflow choices. After you choose, it writes `.agent-world/world.json` and `.agent-world/prompts/*.md` with sample agents and a matching workflow.
+   Codex should ask which messaging workflow you want using a user-input or human-in-the-loop tool that can show all nine workflow patterns. If no suitable tool is available, it should ask in chat and list every pattern. It must not compress, rename, replace, or add workflow choices. After you choose, it writes `.agent-world/world.json`, `.agent-world/world.eval.md`, and `.agent-world/prompts/*.md` with sample agents and a matching workflow.
 
    If `.agent-world/world.json` already exists, Codex must ask whether to recreate and overwrite it. If recreating, Codex must ask for the workflow again from the nine options.
 
@@ -202,9 +206,26 @@ The init process:
    - Orchestrator-worker
    If the user has not already named one of these patterns, creation stops here until they choose. Agent World should not infer or default the workflow type.
 4. On confirmed recreate, removes the old `.agent-world/prompts/` directory before writing new generated prompt files, while leaving unrelated `.agent-world/` files alone.
-5. Writes a valid `.agent-world/world.json` with sample agents, prompt paths, keyed workflow nodes, keyed edges, and stop behavior for the selected pattern, plus matching `.agent-world/prompts/*.md` files.
+5. Writes a valid `.agent-world/world.json` with sample agents, prompt paths, keyed workflow nodes, keyed edges, and stop behavior for the selected pattern, plus `.agent-world/world.eval.md` and matching `.agent-world/prompts/*.md` files.
 6. Leaves `world.schema.json` in the skill directory; hosts and clients validate against that canonical schema instead of copying it into every world.
 7. Stops after creation unless the user also asks to run the world.
+
+## Evaluating A World
+
+Generated worlds include `.agent-world/world.eval.md`. That file is a contract, not a run log: it says which deterministic config, prompt, and routing behavior proves the world is wired correctly.
+
+Do not confuse the two eval files: `eval-agent-world.md` is the skill-relative instruction file, while `.agent-world/world.eval.md` is the project-relative contract. `.agent-world/eval-agent-world.md` is not a valid path.
+
+Run the deterministic eval with:
+
+```bash
+node "$SKILL_DIR/scripts/agent-world-eval.js" \
+  --config .agent-world/world.json \
+  --eval .agent-world/world.eval.md \
+  --out .agent-world/eval-runs
+```
+
+The runner loads the world config, validates prompt and graph contracts, parses fenced `json` routing cases from `world.eval.md`, drives the router through file-based handoff, and writes a report under `.agent-world/eval-runs/`. It does not call a live model. Semantic smoke tests belong in the eval contract as optional advisory checks and must be reported separately.
 
 ## The Short Version
 
