@@ -10,7 +10,7 @@ Do not look for `.agent-world/eval-agent-world.md`; that path is invalid. The pr
 
 1. Resolve `.agent-world/world.json`.
 2. Resolve `.agent-world/world.eval.md`.
-3. If `world.eval.md` is missing, generate it from the current world config and selected workflow pattern. Do not run a generic, hand-written eval that ignores the configured workflow.
+3. If `world.eval.md` is missing, generate it from the current world config and selected canonical workflow pattern id. Do not run a generic, hand-written eval that ignores the configured workflow.
 4. Run the deterministic eval script:
 
    ```bash
@@ -95,19 +95,20 @@ Every generated `world.eval.md` should include:
 
 ## Pattern Minimums
 
-The generated routing cases should follow the selected workflow pattern:
+The generated routing cases should follow the selected canonical workflow pattern id:
 
-| Pattern | Must test |
+| Pattern id | Must test |
 | --- | --- |
-| Broadcast | Human message wakes intended agents; collector waits for required lanes. |
-| Direct handoff | Sender routes only to receiver; off-edge mention blocks. |
-| Multi-agent fan-out | One message queues multiple lanes. |
-| Fan-in / collector | Collector only runs after required nodes complete. |
-| Sequential pipeline | Each step routes to next; skipping blocks. |
-| Intent router | Router can only mention one valid specialist. |
-| FSM / state-token workflow | State token routes to the correct next node. |
-| Debate / ping-pong loop | Pro/con alternate; judge can stop; turn limit blocks runaway routing. |
-| Orchestrator-worker | Orchestrator delegates; synthesizer merges after workers. |
+| `broadcast` | Human message wakes intended agents; collector waits for required lanes. |
+| `direct-handoff` | Sender routes only to receiver; off-edge mention blocks. |
+| `multi-agent-fan-out` | One message queues multiple lanes. |
+| `fan-in-collector` | Collector only runs after required nodes complete. |
+| `sequential-pipeline` | Each step routes to next; skipping blocks. |
+| `intent-router` | Router can only mention one valid specialist. |
+| `fsm-state-token` | State token routes to the correct next node. |
+| `debate-ping-pong-loop` | Pro/con alternate; judge can stop; turn limit blocks runaway routing. |
+| `orchestrator-worker` | Orchestrator delegates; synthesizer merges after workers. |
+| `custom-dag` | Customized workflow graph entry, edges, required joins, invalid handoffs, and stop-token completion. |
 
 ## Semantic Smoke Tests
 

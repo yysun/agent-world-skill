@@ -60,7 +60,7 @@ function makeEvalWorld(evalMarkdown) {
       mode: 'host_delegated'
     },
     workflow: {
-      type: 'dag',
+      type: 'sequential-pipeline',
       entry: 'intake',
       entryAgent: 'intake',
       enforceEdges: true,

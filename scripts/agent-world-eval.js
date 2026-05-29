@@ -20,6 +20,18 @@ const path = require('node:path');
 
 const routerPath = path.join(__dirname, 'agent-world-router.js');
 const { loadConfig } = require(routerPath);
+const SUPPORTED_WORKFLOW_TYPES = new Set([
+  'broadcast',
+  'direct-handoff',
+  'multi-agent-fan-out',
+  'fan-in-collector',
+  'sequential-pipeline',
+  'intent-router',
+  'fsm-state-token',
+  'debate-ping-pong-loop',
+  'orchestrator-worker',
+  'custom-dag'
+]);
 
 function parseArgs(argv) {
   const out = { _: [] };
@@ -212,8 +224,8 @@ function assertExpectation(expect, result, config) {
 function runRouterFile(projectRoot, requestDir, request) {
   runRouterFile.counter = (runRouterFile.counter || 0) + 1;
   const index = String(runRouterFile.counter).padStart(3, '0');
-  const requestPath = path.join(requestDir, `request-${index}.json`);
-  const resultPath = path.join(requestDir, `result-${index}.json`);
+  const requestPath = path.join(requestDir, 'requests', `request-${index}.json`);
+  const resultPath = path.join(requestDir, 'responses', `result-${index}.json`);
   writeJsonFile(requestPath, { resultPath, ...request });
 
   const result = spawnSync(process.execPath, [routerPath, 'file', '--request', requestPath, '--result', resultPath], {
@@ -344,6 +356,12 @@ function validateWorldContract(checks, rawConfig, config, configPath) {
   addCheck(checks, 'config', 'workflow.entry exists', () => {
     if (!config.workflow.entry || !config.workflow.nodes[config.workflow.entry]) {
       throw new Error(`missing workflow entry node: ${config.workflow.entry || '(none)'}`);
+    }
+  });
+
+  addCheck(checks, 'config', 'workflow.type is a canonical workflow pattern id', () => {
+    if (!SUPPORTED_WORKFLOW_TYPES.has(config.workflow.type)) {
+      throw new Error(`workflow.type must be one of the supported canonical workflow pattern ids, got ${config.workflow.type || '(none)'}`);
     }
   });
 

@@ -47,12 +47,23 @@
     "workflow": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["entry", "entryAgent", "nodes", "edges"],
+      "required": ["type", "entry", "entryAgent", "nodes", "edges"],
       "properties": {
         "type": {
+          "description": "Canonical workflow pattern id. Use custom-dag only for explicitly customized user-defined workflow graphs; it is not a default init option.",
           "type": "string",
-          "enum": ["dag", "mention_graph"],
-          "default": "dag"
+          "enum": [
+            "broadcast",
+            "direct-handoff",
+            "multi-agent-fan-out",
+            "fan-in-collector",
+            "sequential-pipeline",
+            "intent-router",
+            "fsm-state-token",
+            "debate-ping-pong-loop",
+            "orchestrator-worker",
+            "custom-dag"
+          ]
         },
         "entry": {
           "$ref": "#/$defs/id"

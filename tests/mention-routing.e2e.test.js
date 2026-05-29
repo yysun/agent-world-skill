@@ -44,7 +44,7 @@ function makeWorld(options = {}) {
       ...(options.mainAgent ? { mainAgent: options.mainAgent } : {})
     },
     workflow: {
-      type: 'dag',
+      type: 'sequential-pipeline',
       entry: 'intake',
       entryAgent: 'pm',
       enforceEdges: options.enforceEdges !== false,

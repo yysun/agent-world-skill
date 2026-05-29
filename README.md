@@ -80,12 +80,12 @@ The important rule: Codex does not pick the next agent. Codex always sends the l
 
 The host loop uses files for the real payload:
 
-- `.agent-world/request-<timestamp>.json`: structured router input.
-- `.agent-world/result-<timestamp>.json`: structured router output.
+- `.agent-world/handoffs/requests/request-<timestamp>.json`: structured router input.
+- `.agent-world/handoffs/responses/result-<timestamp>.json`: structured router output.
 - stdout or the tool result: brief status notification only.
 - stderr and logs: human/debug output.
 
-Do not put the real handoff payload on stdout. That channel is too easy to pollute with logs and too visible for large protocol objects. Do not write handoff files at the project root; keep them under `./.agent-world/`.
+Do not put the real handoff payload on stdout. That channel is too easy to pollute with logs and too visible for large protocol objects. Do not write handoff files at the project root or directly under `./.agent-world/`; keep them under `./.agent-world/handoffs/requests/` and `./.agent-world/handoffs/responses/`.
 
 Example user request:
 
@@ -99,7 +99,7 @@ Example user request:
 Run:
 
 ```bash
-node "$ROUTER" file --request .agent-world/request-20260526T142233123Z-user.json --result .agent-world/result-20260526T142233123Z-user.json
+node "$ROUTER" file --request .agent-world/handoffs/requests/request-20260526T142233123Z-user.json --result .agent-world/handoffs/responses/result-20260526T142233123Z-user.json
 ```
 
 Then read the matching timestamped result file and follow its `type`.
@@ -172,9 +172,9 @@ The router owns all of this. Agents should mention the intended next target, but
 
    Short command forms such as `agent-world: init` and `agent-world init` mean the same thing. They are not tool calls.
 
-   Codex should ask which messaging workflow you want using a user-input or human-in-the-loop tool that can show all nine workflow patterns. If no suitable tool is available, it should ask in chat and list every pattern. It must not compress, rename, replace, or add workflow choices. After you choose, it writes `.agent-world/world.json`, `.agent-world/world.eval.md`, and `.agent-world/prompts/*.md` with sample agents and a matching workflow.
+   Codex should ask which messaging workflow you want using a user-input or human-in-the-loop tool that can show all nine default workflow pattern ids. If no suitable tool is available, it should ask in chat and list every default id with its display label. It must not compress, rename, replace, or add workflow choices. `custom-dag` is not a tenth default pattern; it is only for a customized user-defined workflow, and is valid only when you explicitly ask for custom routing/workflow design or provide a custom graph. After you choose, it writes `.agent-world/world.json`, `.agent-world/world.eval.md`, and `.agent-world/prompts/*.md` with sample agents and a matching workflow.
 
-   If `.agent-world/world.json` already exists, Codex must ask whether to recreate and overwrite it. If recreating, Codex must ask for the workflow again from the nine options.
+   If `.agent-world/world.json` already exists, Codex must ask whether to recreate and overwrite it. If recreating, Codex must ask for the workflow again from the nine default ids, or `custom-dag` when a customized workflow is explicitly requested.
 
 3. Ask the agent app for the work you want:
 
@@ -194,21 +194,23 @@ The init process:
 
 1. Checks whether `.agent-world/world.json` already exists under the current working directory.
 2. Asks whether to recreate and overwrite the generated world bundle if the file exists.
-3. On first create or confirmed recreate, asks the user to choose one workflow pattern, using a user-input or human-in-the-loop tool that can show every option when available:
-   - Broadcast
-   - Direct handoff
-   - Multi-agent fan-out
-   - Fan-in / collector
-   - Sequential pipeline
-   - Intent router
-   - FSM / state-token workflow
-   - Debate / ping-pong loop
-   - Orchestrator-worker
-   If the user has not already named one of these patterns, creation stops here until they choose. Agent World should not infer or default the workflow type.
+3. On first create or confirmed recreate, asks the user to choose one workflow pattern, using a user-input or human-in-the-loop tool that can show every default option when available:
+   - `broadcast` - Broadcast
+   - `direct-handoff` - Direct handoff
+   - `multi-agent-fan-out` - Multi-agent fan-out
+   - `fan-in-collector` - Fan-in / collector
+   - `sequential-pipeline` - Sequential pipeline
+   - `intent-router` - Intent router
+   - `fsm-state-token` - FSM / state-token workflow
+   - `debate-ping-pong-loop` - Debate / ping-pong loop
+   - `orchestrator-worker` - Orchestrator-worker
+   If the user has not already named one of these ids, creation stops here until they choose. Agent World should not infer or default the workflow type. `custom-dag` is not a default choice; it is allowed only when the user explicitly asks for custom routing/workflow design or provides a custom graph.
 4. On confirmed recreate, removes the old `.agent-world/prompts/` directory before writing new generated prompt files, while leaving unrelated `.agent-world/` files alone.
-5. Writes a valid `.agent-world/world.json` with sample agents, prompt paths, keyed workflow nodes, keyed edges, and stop behavior for the selected pattern, plus `.agent-world/world.eval.md` and matching `.agent-world/prompts/*.md` files.
-6. Leaves `world.schema.json` in the skill directory; hosts and clients validate against that canonical schema instead of copying it into every world.
-7. Stops after creation unless the user also asks to run the world.
+5. Writes a valid `.agent-world/world.json` with `workflow.type` set to the selected canonical pattern id, sample agents, prompt paths, keyed workflow nodes, keyed edges, and stop behavior for the selected pattern, plus `.agent-world/world.eval.md` and matching `.agent-world/prompts/*.md` files.
+6. Validates `.agent-world/world.json` against skill-relative `world.schema.json`, fixes validation failures, and reruns validation before reporting success.
+7. Runs the deterministic eval against `.agent-world/world.json` and `.agent-world/world.eval.md`, fixes failures, and reruns eval before reporting success.
+8. Leaves `world.schema.json` in the skill directory; hosts and clients validate against that canonical schema instead of copying it into every world.
+9. Stops after creation unless the user also asks to run the world.
 
 ## Evaluating A World
 

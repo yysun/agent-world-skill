@@ -6,6 +6,7 @@
   - Added file-based request/result handoff coverage.
   - Added coverage for documented @mention normalization and world tags.
   - DAG edge enforcement remains the compatibility boundary for routed mentions.
+  - Generated handoff files now live under .agent-world/handoffs subfolders.
 */
 
 const assert = require('node:assert/strict');
@@ -21,7 +22,9 @@ let handoffCounter = 0;
 
 function testHandoffName(kind) {
   handoffCounter += 1;
-  return `.agent-world/${kind}-20260102T030405${String(handoffCounter).padStart(3, '0')}Z.json`;
+  const stamp = `20260102T030405${String(handoffCounter).padStart(3, '0')}Z`;
+  if (kind === 'request') return `.agent-world/handoffs/requests/request-${stamp}.json`;
+  return `.agent-world/handoffs/responses/result-${stamp}.json`;
 }
 
 function writePromptFiles(worldDir, prompts) {
@@ -58,7 +61,7 @@ function makeWorld(options = {}) {
       ...(options.mainAgent ? { mainAgent: options.mainAgent } : {})
     },
     workflow: {
-      type: 'dag',
+      type: 'sequential-pipeline',
       entry: 'requirements',
       entryAgent: 'pm',
       enforceEdges: true,
@@ -164,12 +167,12 @@ function runRaw(world, args, input = '') {
 }
 
 function runFile(world, request, options = {}) {
-  const handoffDir = path.join(world.cwd, '.agent-world');
-  fs.mkdirSync(handoffDir, { recursive: true });
   const requestName = options.requestName || testHandoffName('request');
   const resultName = options.resultName || testHandoffName('result');
   const requestPath = path.join(world.cwd, requestName);
   const resultPath = path.join(world.cwd, resultName);
+  fs.mkdirSync(path.dirname(requestPath), { recursive: true });
+  fs.mkdirSync(path.dirname(resultPath), { recursive: true });
   fs.writeFileSync(requestPath, JSON.stringify({
     configPath: world.configPath,
     statePath: world.statePath,
@@ -189,8 +192,8 @@ function runFile(world, request, options = {}) {
   assert.match(result.stdout, /^agent-world-router: wrote result-\d{8}T\d{9}Z\.json\n$/);
   assert.equal(result.stderr, '');
   assert.ok(fs.existsSync(resultPath));
-  assert.match(path.relative(world.cwd, requestPath), /^\.agent-world\/request-\d{8}T\d{9}Z\.json$/);
-  assert.match(path.relative(world.cwd, resultPath), /^\.agent-world\/result-\d{8}T\d{9}Z\.json$/);
+  assert.match(path.relative(world.cwd, requestPath), /^\.agent-world\/handoffs\/requests\/request-\d{8}T\d{9}Z\.json$/);
+  assert.match(path.relative(world.cwd, resultPath), /^\.agent-world\/handoffs\/responses\/result-\d{8}T\d{9}Z\.json$/);
   return {
     stdout: result.stdout,
     requestPath,
@@ -200,9 +203,8 @@ function runFile(world, request, options = {}) {
 }
 
 function runFileWithDefaultResult(world, request) {
-  const handoffDir = path.join(world.cwd, '.agent-world');
-  fs.mkdirSync(handoffDir, { recursive: true });
   const requestPath = path.join(world.cwd, testHandoffName('request'));
+  fs.mkdirSync(path.dirname(requestPath), { recursive: true });
   fs.writeFileSync(requestPath, JSON.stringify({
     configPath: world.configPath,
     statePath: world.statePath,
@@ -220,7 +222,7 @@ function runFileWithDefaultResult(world, request) {
   assert.equal(result.status, 0, result.stderr || result.stdout);
   const match = result.stdout.match(/^agent-world-router: wrote (result-\d{8}T\d{9}Z\.json)\n$/);
   assert.ok(match, result.stdout);
-  const resultPath = path.join(handoffDir, match[1]);
+  const resultPath = path.join(world.cwd, '.agent-world', 'handoffs', 'responses', match[1]);
   assert.ok(fs.existsSync(resultPath));
   return {
     stdout: result.stdout,
@@ -292,9 +294,9 @@ test('unit: loads .agent-world/world.json from cwd and returns the configured en
   assert.equal(next.workflow.node, 'requirements');
   assert.deepEqual(next.workflow.next.map(item => item.node), ['architecture']);
   assert.match(next.systemPrompt, /@pm in the test world/);
-  assert.match(next.responseContract.completeByRunning, /^node "\$ROUTER" file --request \.agent-world\/request-\d{8}T\d{9}Z-turn-turn_0001\.json --result \.agent-world\/result-\d{8}T\d{9}Z-turn-turn_0001\.json$/);
-  assert.match(next.responseContract.requestPath, /^\.agent-world\/request-\d{8}T\d{9}Z-turn-turn_0001\.json$/);
-  assert.match(next.responseContract.resultPath, /^\.agent-world\/result-\d{8}T\d{9}Z-turn-turn_0001\.json$/);
+  assert.match(next.responseContract.completeByRunning, /^node "\$ROUTER" file --request \.agent-world\/handoffs\/requests\/request-\d{8}T\d{9}Z-turn-turn_0001\.json --result \.agent-world\/handoffs\/responses\/result-\d{8}T\d{9}Z-turn-turn_0001\.json$/);
+  assert.match(next.responseContract.requestPath, /^\.agent-world\/handoffs\/requests\/request-\d{8}T\d{9}Z-turn-turn_0001\.json$/);
+  assert.match(next.responseContract.resultPath, /^\.agent-world\/handoffs\/responses\/result-\d{8}T\d{9}Z-turn-turn_0001\.json$/);
   assert.deepEqual(next.responseContract.requestJson, {
     command: 'complete',
     turnId: 'turn_0001',
@@ -302,7 +304,7 @@ test('unit: loads .agent-world/world.json from cwd and returns the configured en
   });
 });
 
-test('unit: file handoff writes user result to timestamped .agent-world result and keeps stdout status-only', () => {
+test('unit: file handoff writes user result to timestamped .agent-world handoff response and keeps stdout status-only', () => {
   const world = makeWorld();
 
   const output = runFile(world, {
@@ -318,7 +320,7 @@ test('unit: file handoff writes user result to timestamped .agent-world result a
   assert.doesNotMatch(output.stdout, /agent_instruction/);
 });
 
-test('unit: file handoff defaults result output to timestamped .agent-world file', () => {
+test('unit: file handoff defaults result output to timestamped .agent-world handoff response file', () => {
   const world = makeWorld();
 
   const output = runFileWithDefaultResult(world, {
@@ -327,8 +329,8 @@ test('unit: file handoff defaults result output to timestamped .agent-world file
   });
 
   assert.equal(output.result.type, 'agent_instruction');
-  assert.match(path.relative(world.cwd, output.requestPath), /^\.agent-world\/request-\d{8}T\d{9}Z\.json$/);
-  assert.match(path.relative(world.cwd, output.resultPath), /^\.agent-world\/result-\d{8}T\d{9}Z\.json$/);
+  assert.match(path.relative(world.cwd, output.requestPath), /^\.agent-world\/handoffs\/requests\/request-\d{8}T\d{9}Z\.json$/);
+  assert.match(path.relative(world.cwd, output.resultPath), /^\.agent-world\/handoffs\/responses\/result-\d{8}T\d{9}Z\.json$/);
 });
 
 test('unit: file handoff completes turns and host actions through structured files', () => {

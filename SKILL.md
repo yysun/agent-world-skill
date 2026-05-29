@@ -54,7 +54,7 @@ When the user asks to create, initialize, init, scaffold, or set up an Agent Wor
 
 Treat shorthand command forms such as `agent-world: init`, `agent-world init`, `agent-world:init`, `agent world init`, and `init agent-world` as init requests. These are not requests to call an `init` tool or function. Do not report `unknown_tool` for these forms.
 
-Before doing any init work, load and follow the skill-relative reference file `init-agent-world.md`. Resolve it relative to the directory containing this `SKILL.md`, not relative to the user's project cwd. That file is the source of truth for creating `.agent-world/world.json`, handling recreate/overwrite confirmation, selecting exactly one of the nine workflow patterns, using the canonical skill-relative `world.schema.json` shape, and generating prompt files under `.agent-world/prompts/`.
+Before doing any init work, load and follow the skill-relative reference file `init-agent-world.md`. Resolve it relative to the directory containing this `SKILL.md`, not relative to the user's project cwd. That file is the source of truth for creating `.agent-world/world.json`, handling recreate/overwrite confirmation, selecting exactly one of the nine default workflow pattern ids, or explicit `custom-dag` only for a customized user-defined workflow, using the canonical skill-relative `world.schema.json` shape, and generating prompt files under `.agent-world/prompts/`.
 
 If `init-agent-world.md` cannot be read, stop and report that the Agent World skill installation is incomplete. Do not invent fallback workflow options, do not use generic presets, and do not create or overwrite `.agent-world/world.json`.
 
@@ -62,7 +62,7 @@ If `init-agent-world.md` cannot be read, stop and report that the Agent World sk
 
 When the user asks to eval, test, verify, validate, confirm, check, or smoke-test whether the world config works, do not manually inspect only by reading. Load and follow the skill-relative reference file `eval-agent-world.md`. Resolve it relative to the directory containing this `SKILL.md`, not relative to the user's project cwd.
 
-Do not look for `.agent-world/eval-agent-world.md`. That path is invalid. The project-level eval contract is `.agent-world/world.eval.md`; if that file is missing, follow `eval-agent-world.md` and generate it from the current world config and selected workflow pattern.
+Do not look for `.agent-world/eval-agent-world.md`. That path is invalid. The project-level eval contract is `.agent-world/world.eval.md`; if that file is missing, follow `eval-agent-world.md` and generate it from the current world config and selected canonical workflow pattern id.
 
 The deterministic eval confirms:
 
@@ -88,10 +88,10 @@ For every Agent-World-scoped message that is not a create/init/setup request, cr
 ```
 
 ```bash
-node "$ROUTER" file --request .agent-world/request-20260526T142233123Z-user.json --result .agent-world/result-20260526T142233123Z-user.json
+node "$ROUTER" file --request .agent-world/handoffs/requests/request-20260526T142233123Z-user.json --result .agent-world/handoffs/responses/result-20260526T142233123Z-user.json
 ```
 
-Read the structured payload from the matching timestamped result file and follow its `type`. Treat stdout or the tool result as a brief status notification only. Do not parse the real router payload from stdout.
+Read the structured payload from the matching timestamped result file under `.agent-world/handoffs/responses/` and follow its `type`. Treat stdout or the tool result as a brief status notification only. Do not parse the real router payload from stdout.
 
 ## `agent_instruction`
 
@@ -129,7 +129,7 @@ Rules:
 Then run:
 
 ```bash
-node "$ROUTER" file --request .agent-world/request-20260526T142233123Z-turn-turn_0001.json --result .agent-world/result-20260526T142233123Z-turn-turn_0001.json
+node "$ROUTER" file --request .agent-world/handoffs/requests/request-20260526T142233123Z-turn-turn_0001.json --result .agent-world/handoffs/responses/result-20260526T142233123Z-turn-turn_0001.json
 ```
 
 Then read `responseContract.resultPath` and follow the next returned instruction.
@@ -186,9 +186,9 @@ No work is pending. Report that the Agent World workflow is idle.
 
 Repeat until `type` is `done`, `blocked`, or `idle`:
 
-1. Write the user message or previous completion to a timestamped file under `./.agent-world/`.
-2. Run `node "$ROUTER" file --request .agent-world/request-<timestamp>.json --result .agent-world/result-<timestamp>.json`.
-3. Read the returned JSON from the matching timestamped result file under `./.agent-world/`.
+1. Write the user message or previous completion to a timestamped file under `./.agent-world/handoffs/requests/`.
+2. Run `node "$ROUTER" file --request .agent-world/handoffs/requests/request-<timestamp>.json --result .agent-world/handoffs/responses/result-<timestamp>.json`.
+3. Read the returned JSON from the matching timestamped result file under `./.agent-world/handoffs/responses/`.
 4. If `agent_instruction`, run exactly one agent turn and complete it.
 5. If `host_action`, execute the host action and complete it.
 6. If `blocked`, report the block and stop.

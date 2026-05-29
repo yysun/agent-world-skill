@@ -11,6 +11,8 @@
   - Added file-based request/result handoff so stdout can stay status-only.
   - Mention parsing now normalizes documented @mention forms before DAG routing.
   - World TO / completion tags and mainAgent fallback feed the same workflow checks.
+  - Moved generated handoff files under .agent-world/handoffs/requests and
+    .agent-world/handoffs/responses.
 */
 
 const fs = require('fs');
@@ -100,7 +102,7 @@ function normalizeWorkflow(parsed, agents) {
   const raw = parsed.workflow || {};
   const routing = parsed.routing || {};
   const workflow = {
-    type: raw.type || 'mention_graph',
+    type: raw.type || 'Unspecified',
     entry: raw.entry || null,
     entryAgent: raw.entryAgent || routing.noMentionFromHumanGoesTo || parsed.world && parsed.world.entryAgent,
     enforceEdges: raw.enforceEdges !== false,
@@ -984,13 +986,13 @@ function handoffFilePair(label) {
   const stamp = timestampSlug();
   const suffix = label ? `-${label}` : '';
   return {
-    requestPath: `.agent-world/request-${stamp}${suffix}.json`,
-    resultPath: `.agent-world/result-${stamp}${suffix}.json`
+    requestPath: `.agent-world/handoffs/requests/request-${stamp}${suffix}.json`,
+    resultPath: `.agent-world/handoffs/responses/result-${stamp}${suffix}.json`
   };
 }
 
 function defaultResultPath() {
-  return path.join(process.cwd(), '.agent-world', `result-${timestampSlug()}.json`);
+  return path.join(process.cwd(), '.agent-world', 'handoffs', 'responses', `result-${timestampSlug()}.json`);
 }
 
 function requestContent(request) {
@@ -1080,7 +1082,7 @@ function withStatePath(statePath, fn) {
 
 function runFileRequest(args) {
   if (!args.request) {
-    throw new Error('file mode requires --request .agent-world/request-<timestamp>.json');
+    throw new Error('file mode requires --request .agent-world/handoffs/requests/request-<timestamp>.json');
   }
   const requestPath = path.resolve(args.request);
   const request = readJsonFile(requestPath);
@@ -1106,7 +1108,7 @@ function help(config) {
   console.log(`Agent World Router
 
 Commands:
-  file --request .agent-world/request-<timestamp>.json --result .agent-world/result-<timestamp>.json
+  file --request .agent-world/handoffs/requests/request-<timestamp>.json --result .agent-world/handoffs/responses/result-<timestamp>.json
                                Read structured request JSON and write structured result JSON
 
 Compatibility commands below write structured JSON to stdout. Do not use them
@@ -1130,9 +1132,9 @@ State path:
 Host loop:
   1. Resolve ROUTER relative to the skill folder: scripts/agent-world-router.js
   2. Run from the project/world cwd containing .agent-world/world.json
-  3. Write .agent-world/request-<timestamp>.json with command and content.
-  4. Run node "$ROUTER" file --request .agent-world/request-<timestamp>.json --result .agent-world/result-<timestamp>.json
-  5. Read .agent-world/result-<timestamp>.json and execute exactly one returned instruction as the host executor.
+  3. Write .agent-world/handoffs/requests/request-<timestamp>.json with command and content.
+  4. Run node "$ROUTER" file --request .agent-world/handoffs/requests/request-<timestamp>.json --result .agent-world/handoffs/responses/result-<timestamp>.json
+  5. Read .agent-world/handoffs/responses/result-<timestamp>.json and execute exactly one returned instruction as the host executor.
   6. Write the next timestamped request file to complete the turn or host action.
   7. Repeat until type=done.
 `);
