@@ -50,23 +50,28 @@
   "agents": {
     "pm": {
       "role": "product_manager_controller",
-      "promptPath": "prompts/pm.md"
+      "promptPath": "prompts/pm.md",
+      "contextScope": "global"
     },
     "architect": {
       "role": "software_architect",
-      "promptPath": "prompts/architect.md"
+      "promptPath": "prompts/architect.md",
+      "contextScope": "agent"
     },
     "dev": {
       "role": "implementation_engineer",
-      "promptPath": "prompts/dev.md"
+      "promptPath": "prompts/dev.md",
+      "contextScope": "agent"
     },
     "qa": {
       "role": "qa_reviewer",
-      "promptPath": "prompts/qa.md"
+      "promptPath": "prompts/qa.md",
+      "contextScope": "agent"
     },
     "sec": {
       "role": "security_reviewer",
-      "promptPath": "prompts/sec.md"
+      "promptPath": "prompts/sec.md",
+      "contextScope": "agent"
     }
   }
 }

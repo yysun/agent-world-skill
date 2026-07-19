@@ -7,6 +7,7 @@
   - Added coverage for documented @mention normalization and world tags.
   - DAG edge enforcement remains the compatibility boundary for routed mentions.
   - Generated handoff files now live under .agent-world/handoffs subfolders.
+  - Covers per-agent context scopes, isolation, limits, defaults, and generation policy.
 */
 
 const assert = require('node:assert/strict');
@@ -37,6 +38,11 @@ function writePromptFiles(worldDir, prompts) {
 
 function writeWorldJson(configPath, config) {
   fs.writeFileSync(configPath, JSON.stringify(config, null, 2));
+}
+
+function configuredContextScope(options, agentId) {
+  if (!options.contextScopes || !Object.hasOwn(options.contextScopes, agentId)) return {};
+  return { contextScope: options.contextScopes[agentId] };
 }
 
 function makeWorld(options = {}) {
@@ -104,24 +110,29 @@ function makeWorld(options = {}) {
     agents: {
       pm: {
         role: 'product_manager',
-        promptPath: 'prompts/pm.md'
+        promptPath: 'prompts/pm.md',
+        ...configuredContextScope(options, 'pm')
       },
       architect: {
         ...(options.displayNames ? { name: 'Software Architect' } : {}),
         role: 'software_architect',
-        promptPath: 'prompts/architect.md'
+        promptPath: 'prompts/architect.md',
+        ...configuredContextScope(options, 'architect')
       },
       dev: {
         role: 'implementation_engineer',
-        promptPath: 'prompts/dev.md'
+        promptPath: 'prompts/dev.md',
+        ...configuredContextScope(options, 'dev')
       },
       qa: {
         role: 'qa_reviewer',
-        promptPath: 'prompts/qa.md'
+        promptPath: 'prompts/qa.md',
+        ...configuredContextScope(options, 'qa')
       },
       sec: {
         role: 'security_reviewer',
-        promptPath: 'prompts/sec.md'
+        promptPath: 'prompts/sec.md',
+        ...configuredContextScope(options, 'sec')
       }
     }
   });
@@ -291,6 +302,9 @@ test('unit: loads .agent-world/world.json from cwd and returns the configured en
   assert.equal(next.world, 'test-world');
   assert.equal(next.agent, 'pm');
   assert.equal(next.role, 'product_manager');
+  assert.equal(next.contextScope, 'global');
+  assert.equal(next.routedFrom.sender, 'human');
+  assert.equal(next.routedFrom.content, 'build an electron app');
   assert.equal(next.workflow.node, 'requirements');
   assert.deepEqual(next.workflow.next.map(item => item.node), ['architecture']);
   assert.match(next.systemPrompt, /@pm in the test world/);
@@ -302,6 +316,150 @@ test('unit: loads .agent-world/world.json from cwd and returns the configured en
     turnId: 'turn_0001',
     content: 'one markdown message as @pm'
   });
+});
+
+test('config schema: contextScope accepts only global and agent with a global default', () => {
+  const schema = JSON.parse(fs.readFileSync(path.join(skillRoot, 'world.schema.json'), 'utf8'));
+  const contextScope = schema.$defs.agent.properties.contextScope;
+
+  assert.deepEqual(contextScope.enum, ['global', 'agent']);
+  assert.equal(contextScope.default, 'global');
+});
+
+test('config validation: rejects an unsupported agent contextScope', () => {
+  assertInvalidConfig({
+    workflow: {
+      entry: 'start',
+      entryAgent: 'pm',
+      nodes: {
+        start: { agent: 'pm' }
+      },
+      edges: {
+        start: []
+      }
+    },
+    agents: {
+      pm: {
+        promptPath: 'prompts/pm.md',
+        contextScope: 'causal'
+      }
+    }
+  }, /agents\.pm\.contextScope must be one of: global, agent/);
+});
+
+test('generation policy: all nine built-in patterns assign valid context scopes to every sample agent', () => {
+  const initReference = fs.readFileSync(path.join(skillRoot, 'init-agent-world.md'), 'utf8');
+  const match = initReference.match(/<!-- context-scope-defaults:start -->\s*```json\s*([\s\S]*?)```\s*<!-- context-scope-defaults:end -->/);
+  assert.ok(match, 'missing machine-checkable context scope defaults');
+  const defaults = JSON.parse(match[1]);
+  const expectedDefaults = {
+    broadcast: { broadcaster: 'agent', researcher: 'agent', critic: 'agent', planner: 'agent', collector: 'global' },
+    'direct-handoff': { sender: 'agent', receiver: 'agent' },
+    'multi-agent-fan-out': { lead: 'agent', qa: 'agent', security: 'agent', collector: 'global' },
+    'fan-in-collector': { researcher: 'agent', analyst: 'agent', collector: 'global' },
+    'sequential-pipeline': { intake: 'agent', architect: 'agent', builder: 'agent', reviewer: 'agent', final: 'global' },
+    'intent-router': { router: 'agent', docs: 'agent', code: 'agent', ops: 'agent' },
+    'fsm-state-token': { state_router: 'global', planner: 'agent', executor: 'agent', reviewer: 'global' },
+    'debate-ping-pong-loop': { pro: 'agent', con: 'agent', judge: 'global' },
+    'orchestrator-worker': { orchestrator: 'global', worker_a: 'agent', worker_b: 'agent', synthesizer: 'global' }
+  };
+
+  assert.deepEqual(defaults, expectedDefaults);
+
+  const example = JSON.parse(fs.readFileSync(path.join(skillRoot, 'world.example.json'), 'utf8'));
+  assert.deepEqual(Object.fromEntries(
+    Object.entries(example.agents).map(([agentId, agent]) => [agentId, agent.contextScope])
+  ), {
+    pm: 'global',
+    architect: 'agent',
+    dev: 'agent',
+    qa: 'agent',
+    sec: 'agent'
+  });
+});
+
+test('context scope: isolated reviewers exclude sibling and upstream messages while the global collector sees both branches', () => {
+  const world = makeWorld({
+    contextScopes: {
+      pm: 'global',
+      qa: 'agent',
+      sec: 'agent'
+    }
+  });
+
+  run(world, ['reset']);
+  run(world, ['user', '--stdin'], 'private-original-request');
+  run(world, ['complete', '--turn', 'turn_0001', '--stdin'], '@architect\narchitecture-request');
+  run(world, ['complete', '--turn', 'turn_0002', '--stdin'], '@dev\nimplementation-request');
+  const qa = run(world, ['complete', '--turn', 'turn_0003', '--stdin'], '@qa\nshared-review-request\n\n@sec\nshared-review-request');
+
+  assert.equal(qa.contextScope, 'agent');
+  assert.equal(qa.routedFrom.sender, 'dev');
+  assert.equal(qa.routedFrom.content, '@qa\nshared-review-request\n\n@sec\nshared-review-request');
+  assert.deepEqual(qa.context.map(message => message.sender), ['dev']);
+  assert.doesNotMatch(qa.hostInstruction, /private-original-request|architecture-request|implementation-request/);
+
+  const sec = run(world, ['complete', '--turn', qa.turnId, '--stdin'], '@pm\nqa-sibling-result');
+  assert.equal(sec.agent, 'sec');
+  assert.equal(sec.contextScope, 'agent');
+  assert.deepEqual(sec.context.map(message => message.sender), ['dev']);
+  assert.doesNotMatch(sec.hostInstruction, /qa-sibling-result|private-original-request/);
+
+  const final = run(world, ['complete', '--turn', sec.turnId, '--stdin'], '@pm\nsecurity-sibling-result');
+  assert.equal(final.agent, 'pm');
+  assert.equal(final.contextScope, 'global');
+  assert.match(final.hostInstruction, /qa-sibling-result/);
+  assert.match(final.hostInstruction, /security-sibling-result/);
+});
+
+test('context scope: agent reserves an old routedFrom slot ahead of 17 latest own messages', () => {
+  const world = makeWorld({
+    contextScopes: {
+      pm: 'agent'
+    }
+  });
+
+  run(world, ['reset']);
+  run(world, ['user', '--stdin'], 'old-routed-from-source');
+  const state = JSON.parse(fs.readFileSync(world.statePath, 'utf8'));
+  for (let index = 1; index <= 18; index += 1) {
+    const suffix = String(index).padStart(2, '0');
+    state.counters.message += 1;
+    state.messages.push({
+      id: `message_${String(state.counters.message).padStart(4, '0')}`,
+      runId: state.currentRunId,
+      sender: 'pm',
+      content: `pm-message-${suffix}`,
+      metadata: {},
+      createdAt: new Date(Date.UTC(2026, 0, 1, 0, 0, index)).toISOString(),
+      processedForRouting: true
+    });
+  }
+  fs.writeFileSync(world.statePath, JSON.stringify(state, null, 2));
+
+  const output = run(world, ['next']);
+
+  assert.equal(output.agent, 'pm');
+  assert.equal(output.contextScope, 'agent');
+  assert.equal(output.context.length, 18);
+  assert.deepEqual(output.context.map(message => message.content), [
+    'old-routed-from-source',
+    ...Array.from({ length: 17 }, (_, index) => `pm-message-${String(index + 2).padStart(2, '0')}`)
+  ]);
+});
+
+test('context scope: global and agent both exclude messages from previous runs', () => {
+  for (const scope of ['global', 'agent']) {
+    const world = makeWorld({ contextScopes: { pm: scope } });
+    run(world, ['reset']);
+    const first = run(world, ['user', '--stdin'], `old-request-${scope}`);
+    run(world, ['complete', '--turn', first.turnId, '--stdin'], `old-response-${scope} <world>pass</world>`);
+
+    const next = run(world, ['user', '--stdin'], `new-request-${scope}`);
+    assert.equal(next.contextScope, scope);
+    assert.deepEqual(next.context.map(message => message.content), [`new-request-${scope}`]);
+    assert.doesNotMatch(next.hostInstruction, new RegExp(`old-(request|response)-${scope}`));
+  }
 });
 
 test('unit: file handoff writes user result to timestamped .agent-world handoff response and keeps stdout status-only', () => {
@@ -438,8 +596,8 @@ Security approved.`);
   assert.deepEqual(output.workflow.next, []);
 });
 
-test('targeted: host actions round-trip back to the requesting agent and workflow node', () => {
-  const world = makeWorld();
+test('targeted: host actions round-trip back to an agent-scoped requester and workflow node', () => {
+  const world = makeWorld({ contextScopes: { dev: 'agent' } });
 
   run(world, ['reset']);
   run(world, ['user', '--stdin'], 'build an electron app');
@@ -472,6 +630,10 @@ test('targeted: host actions round-trip back to the requesting agent and workflo
   assert.equal(next.agent, 'dev');
   assert.equal(next.reason, 'host_action_result');
   assert.equal(next.workflow.node, 'implementation');
+  assert.equal(next.contextScope, 'agent');
+  assert.deepEqual(next.context.map(message => message.sender), ['dev', 'host']);
+  assert.match(next.hostInstruction, /created files/);
+  assert.doesNotMatch(next.hostInstruction, /build an electron app/);
 });
 
 test('regression: paragraph mentions inside fenced code do not route', () => {

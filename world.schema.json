@@ -176,6 +176,11 @@
         },
         "promptPath": {
           "$ref": "#/$defs/path"
+        },
+        "contextScope": {
+          "type": "string",
+          "enum": ["global", "agent"],
+          "default": "global"
         }
       }
     }

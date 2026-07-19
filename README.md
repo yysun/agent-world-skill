@@ -76,6 +76,15 @@ The router can return five result types:
 
 The important rule: Codex does not pick the next agent. Codex always sends the latest message to the router and follows the one instruction the router returns.
 
+## Agent Context Scope
+
+Each agent may set `contextScope` in `world.json`:
+
+- `global` receives the final 18 messages from the current run. Use it for collectors, judges, final synthesizers, and controllers that must merge independent work.
+- `agent` receives the current routed-from message plus up to 17 of that agent's most recent messages from the current run. Use it for isolated workers, reviewers, routers, and sequential specialists.
+
+The router defaults omitted values to `global` so existing worlds keep their current behavior. Both the structured `context` and rendered host instruction use the same selected messages. The exact `routedFrom` message is also exposed separately for every scope.
+
 ## File-Based Handoff
 
 The host loop uses files for the real payload:
@@ -206,7 +215,7 @@ The init process:
    - `orchestrator-worker` - Orchestrator-worker
    If the user has not already named one of these ids, creation stops here until they choose. Agent World should not infer or default the workflow type. `custom-dag` is not a default choice; it is allowed only when the user explicitly asks for custom routing/workflow design or provides a custom graph.
 4. On confirmed recreate, removes the old `.agent-world/prompts/` directory before writing new generated prompt files, while leaving unrelated `.agent-world/` files alone.
-5. Writes a valid `.agent-world/world.json` with `workflow.type` set to the selected canonical pattern id, sample agents, prompt paths, keyed workflow nodes, keyed edges, and stop behavior for the selected pattern, plus `.agent-world/world.eval.md` and matching `.agent-world/prompts/*.md` files.
+5. Writes a valid `.agent-world/world.json` with `workflow.type` set to the selected canonical pattern id, sample agents, prompt paths, explicit role-appropriate `contextScope` values, keyed workflow nodes, keyed edges, and stop behavior for the selected pattern, plus `.agent-world/world.eval.md` and matching `.agent-world/prompts/*.md` files.
 6. Validates `.agent-world/world.json` against skill-relative `world.schema.json`, fixes validation failures, and reruns validation before reporting success.
 7. Runs the deterministic eval against `.agent-world/world.json` and `.agent-world/world.eval.md`, fixes failures, and reruns eval before reporting success.
 8. Leaves `world.schema.json` in the skill directory; hosts and clients validate against that canonical schema instead of copying it into every world.

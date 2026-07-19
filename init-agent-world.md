@@ -63,11 +63,13 @@ Creation is host setup. Do not start the router loop until `.agent-world/world.j
      "agents": {
        "broadcaster": {
          "role": "broadcaster",
-         "promptPath": "prompts/broadcaster.md"
+         "promptPath": "prompts/broadcaster.md",
+         "contextScope": "agent"
        },
        "collector": {
          "role": "collector",
-         "promptPath": "prompts/collector.md"
+         "promptPath": "prompts/collector.md",
+         "contextScope": "global"
        }
      }
    }
@@ -83,7 +85,7 @@ Creation is host setup. Do not start the router loop until `.agent-world/world.j
    - Do not add semantic fields such as `type`, `kind`, `mode`, `join`, `state`, or `role` inside workflow nodes.
 12. Set `workflow.type` to the canonical kebab-case pattern id from "Workflow Patterns", such as `broadcast` or `sequential-pipeline`. Use `custom-dag` only for a customized user-defined workflow when the user explicitly asked for custom routing/workflow design or provided a custom graph. Do not write display labels such as `Broadcast`, `Sequential pipeline`, or implementation labels such as `dag` or `mention_graph` into generated worlds.
 13. Prefer `workflow.enforceEdges: true`. For loop-shaped patterns, keep `turnLimit` conservative and make the stop condition explicit in prompts.
-14. Agent entries in `world.json` must use `promptPath`, not inline prompt text. Do not include `"$schema": "./world.schema.json"` in generated worlds unless a specific host/client owns that schema reference strategy.
+14. Agent entries in `world.json` must use `promptPath`, not inline prompt text, and must explicitly set `contextScope` from the selected pattern's required defaults below. Do not omit it from generated agents. Do not include `"$schema": "./world.schema.json"` in generated worlds unless a specific host/client owns that schema reference strategy.
 15. Agent prompts must tell agents to use paragraph-start `@mentions`, stay inside the workflow, never run tools directly, request host work with an `agent-world-host-action` JSON block, and end final responses with `<world>pass</world>`.
 16. After writing `world.json`, validate it against `world.schema.json` before reporting success. If validation fails, fix `world.json` and rerun validation.
 17. After schema validation passes, run the deterministic eval script against the generated `world.json` and `world.eval.md`. If eval fails, fix the generated bundle and rerun eval before reporting success.
@@ -118,6 +120,69 @@ Creation is host setup. Do not start the router loop until `.agent-world/world.j
 - `orchestrator-worker`: create `orchestrator`, `worker_a`, `worker_b`, and `synthesizer`; orchestrator delegates; synthesizer merges.
 - `custom-dag`: derive agents, nodes, edges, and `requires` from the user's customized workflow or provided graph. Keep every node schema-valid.
 
+## Required Context Scope Defaults
+
+Every generated agent for the nine out-of-box patterns must use the exact assignment below. `agent` gives a specialist its own current-run messages plus the current inbound message. `global` is reserved for roles that must merge branches or retain shared workflow state. For an explicit `custom-dag`, use `global` for collectors, joins, judges, final synthesizers, and stateful controllers; use `agent` for isolated workers and sequential specialists.
+
+<!-- context-scope-defaults:start -->
+```json
+{
+  "broadcast": {
+    "broadcaster": "agent",
+    "researcher": "agent",
+    "critic": "agent",
+    "planner": "agent",
+    "collector": "global"
+  },
+  "direct-handoff": {
+    "sender": "agent",
+    "receiver": "agent"
+  },
+  "multi-agent-fan-out": {
+    "lead": "agent",
+    "qa": "agent",
+    "security": "agent",
+    "collector": "global"
+  },
+  "fan-in-collector": {
+    "researcher": "agent",
+    "analyst": "agent",
+    "collector": "global"
+  },
+  "sequential-pipeline": {
+    "intake": "agent",
+    "architect": "agent",
+    "builder": "agent",
+    "reviewer": "agent",
+    "final": "global"
+  },
+  "intent-router": {
+    "router": "agent",
+    "docs": "agent",
+    "code": "agent",
+    "ops": "agent"
+  },
+  "fsm-state-token": {
+    "state_router": "global",
+    "planner": "agent",
+    "executor": "agent",
+    "reviewer": "global"
+  },
+  "debate-ping-pong-loop": {
+    "pro": "agent",
+    "con": "agent",
+    "judge": "global"
+  },
+  "orchestrator-worker": {
+    "orchestrator": "global",
+    "worker_a": "agent",
+    "worker_b": "agent",
+    "synthesizer": "global"
+  }
+}
+```
+<!-- context-scope-defaults:end -->
+
 ## JSON Requirements
 
 - every workflow node references an existing agent
@@ -127,6 +192,7 @@ Creation is host setup. Do not start the router loop until `.agent-world/world.j
 - `workflow.entryAgent` matches the entry node's agent
 - nodes with `requires` reference existing workflow nodes
 - every agent has a `promptPath` pointing to an existing Markdown prompt file
+- every generated agent explicitly sets `contextScope` to `agent` or `global` using the selected pattern's required defaults
 - final nodes tell the agent to end with `<world>pass</world>`
 - `agents`, `workflow.nodes`, and `workflow.edges` are keyed objects, not arrays
 - workflow nodes contain only `agent`, `instruction`, and `requires`; never add node-level `type`, `kind`, `mode`, `join`, `state`, or `role`

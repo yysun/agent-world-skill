@@ -13,6 +13,7 @@
   - World TO / completion tags and mainAgent fallback feed the same workflow checks.
   - Moved generated handoff files under .agent-world/handoffs/requests and
     .agent-world/handoffs/responses.
+  - Added per-agent global or agent-only context selection for host instructions.
 */
 
 const fs = require('fs');
@@ -21,6 +22,9 @@ const path = require('path');
 const ROUTER_COMMAND = 'node "$ROUTER"';
 const DEFAULT_STATE_PATH = process.env.AGENT_WORLD_STATE || path.join(process.cwd(), '.agent-world', 'agent-world-state.json');
 const DEFAULT_CONFIG_PATH = process.env.AGENT_WORLD_CONFIG || path.join(process.cwd(), '.agent-world', 'world.json');
+const DEFAULT_CONTEXT_SCOPE = 'global';
+const CONTEXT_LIMIT = 18;
+const CONTEXT_SCOPES = new Set(['global', 'agent']);
 let activeStatePath = DEFAULT_STATE_PATH;
 
 function now() {
@@ -92,6 +96,7 @@ function normalizeAgents(parsed, configPath) {
     agent.id = agent.id || id;
     agent.name = agent.name || agent.id;
     agent.role = agent.role || agent.id;
+    agent.contextScope = agent.contextScope === undefined ? DEFAULT_CONTEXT_SCOPE : agent.contextScope;
     agent.systemPrompt = readPrompt(configDir, agent);
     agents[agent.id] = agent;
   }
@@ -159,6 +164,12 @@ function validateConfig(config) {
   const workflow = config.workflow || {};
   const nodes = workflow.nodes || {};
   const edges = workflow.edges || {};
+
+  for (const [agentId, agent] of Object.entries(agents)) {
+    if (!CONTEXT_SCOPES.has(agent.contextScope)) {
+      errors.push(`agents.${agentId}.contextScope must be one of: ${[...CONTEXT_SCOPES].join(', ')}`);
+    }
+  }
 
   if (workflow.entry && !nodes[workflow.entry]) {
     errors.push(`workflow.entry "${workflow.entry}" does not match a workflow node`);
@@ -716,8 +727,8 @@ function processMessageForRouting(state, msg) {
   }
 }
 
-function compactContext(state, limit = 18) {
-  return state.messages.filter(message => isCurrentRun(state, message)).slice(-limit).map(message => ({
+function compactMessages(messages) {
+  return messages.map(message => ({
     id: message.id,
     runId: message.runId,
     sender: message.sender,
@@ -726,8 +737,26 @@ function compactContext(state, limit = 18) {
   }));
 }
 
-function contextMarkdown(state, limit = 18) {
-  return compactContext(state, limit)
+function compactContext(state, turn, limit = CONTEXT_LIMIT) {
+  const runMessages = state.messages.filter(message => isCurrentRun(state, message));
+  const agent = state.agents[turn.agent];
+  const scope = agent && agent.contextScope || DEFAULT_CONTEXT_SCOPE;
+
+  if (scope === 'global') return compactMessages(runMessages.slice(-limit));
+
+  const sourceMessage = runMessages.find(message => message.id === turn.sourceMessageId) || null;
+  const ownMessageLimit = Math.max(0, limit - (sourceMessage ? 1 : 0));
+  const authoredMessages = runMessages
+    .filter(message => message.sender === turn.agent && (!sourceMessage || message.id !== sourceMessage.id));
+  const ownMessages = ownMessageLimit > 0 ? authoredMessages.slice(-ownMessageLimit) : [];
+  const selectedIds = new Set(ownMessages.map(message => message.id));
+  if (sourceMessage) selectedIds.add(sourceMessage.id);
+
+  return compactMessages(runMessages.filter(message => selectedIds.has(message.id)));
+}
+
+function contextMarkdown(context) {
+  return context
     .map(message => `---\nfrom: ${message.sender}\nid: ${message.id}\n${message.content}`)
     .join('\n');
 }
@@ -757,7 +786,7 @@ function workflowHints(state, turn) {
 function buildAgentInstruction(state, turn) {
   const agent = state.agents[turn.agent];
   const systemPrompt = agent.systemPrompt;
-  const context = compactContext(state);
+  const context = compactContext(state, turn);
   const routedFrom = messageById(state, turn.sourceMessageId);
   const workflow = workflowHints(state, turn);
   const handoff = handoffFilePair(`turn-${turn.id}`);
@@ -782,7 +811,7 @@ Routed-from message:
 ${routedFrom ? `from: ${routedFrom.sender}\nid: ${routedFrom.id}\n${routedFrom.content}` : '(missing)'}
 
 Conversation context:
-${contextMarkdown(state)}
+${contextMarkdown(context)}
 
 Now produce ONLY @${agent.name}'s next message. Do not explain the protocol. Do not call tools during this agent turn. If you hand off, mention the target agent at the start of its own paragraph and stop after that handoff. If external work is needed, emit an agent-world-host-action JSON block.`;
 
@@ -793,6 +822,7 @@ Now produce ONLY @${agent.name}'s next message. Do not explain the protocol. Do 
     turnId: turn.id,
     agent: agent.name,
     role: agent.role,
+    contextScope: agent.contextScope,
     reason: turn.reason,
     workflow,
     routedFrom: routedFrom ? {

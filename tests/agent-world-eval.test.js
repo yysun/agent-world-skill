@@ -4,6 +4,7 @@
   Recent changes:
   - Exercises the deterministic eval harness against temporary generated worlds.
   - Covers passing routing contracts and failed expected-result reporting.
+  - Uses explicit built-in agent context scopes in generated eval fixtures.
 */
 
 const assert = require('node:assert/strict');
@@ -87,15 +88,18 @@ function makeEvalWorld(evalMarkdown) {
     agents: {
       intake: {
         role: 'intake',
-        promptPath: 'prompts/intake.md'
+        promptPath: 'prompts/intake.md',
+        contextScope: 'agent'
       },
       architect: {
         role: 'architect',
-        promptPath: 'prompts/architect.md'
+        promptPath: 'prompts/architect.md',
+        contextScope: 'agent'
       },
       final: {
         role: 'final',
-        promptPath: 'prompts/final.md'
+        promptPath: 'prompts/final.md',
+        contextScope: 'global'
       }
     }
   });

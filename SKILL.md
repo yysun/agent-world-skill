@@ -103,12 +103,15 @@ The router returns the selected agent, loaded prompt, workflow node, context, an
 - `workflow`
 - `systemPrompt`
 - `context`
+- `contextScope`
 - `hostInstruction`
 - `responseContract.completeByRunning`
 - `responseContract.requestPath`
 - `responseContract.resultPath`
 
 Run exactly one turn as the named agent. Use `hostInstruction` as the execution brief. Produce one markdown message as that agent.
+
+`contextScope` is configured per agent. `global` includes the final 18 messages from the current run. `agent` includes the current routed-from message plus up to 17 of that agent's recent messages from the current run. The router must use the same selected messages in `context` and the rendered `hostInstruction`; do not supplement scoped context yourself.
 
 Rules:
 
