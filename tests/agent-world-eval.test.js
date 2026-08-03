@@ -5,6 +5,7 @@
   - Exercises the deterministic eval harness against temporary generated worlds.
   - Covers passing routing contracts and failed expected-result reporting.
   - Uses explicit built-in agent context scopes in generated eval fixtures.
+  - skillRoot now resolves into skills/agent-world/ after the skill-restructure move.
 */
 
 const assert = require('node:assert/strict');
@@ -14,7 +15,7 @@ const os = require('node:os');
 const path = require('node:path');
 const test = require('node:test');
 
-const skillRoot = path.resolve(__dirname, '..');
+const skillRoot = path.resolve(__dirname, '..', 'skills', 'agent-world');
 const evalRunner = path.join(skillRoot, 'scripts', 'agent-world-eval.js');
 
 function writeJson(filePath, value) {

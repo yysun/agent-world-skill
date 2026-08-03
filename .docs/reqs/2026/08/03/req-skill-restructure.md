@@ -16,14 +16,14 @@ Every reference to a relocated file — in documentation, in code, and in tests 
 
 ## Acceptance Criteria
 
-- [ ] The installable skill directory contains the skill manifest, its reference documents, the canonical schema, the canonical example, the sample prompts, and the router and eval scripts.
-- [ ] The repository root no longer holds a copy of any relocated file, and `README.md`, `tests/`, and `.docs/` remain at the root.
-- [ ] The router and eval scripts remain siblings within the skill directory, preserving the sibling resolution the eval runner depends on.
-- [ ] The existing router, eval, and mention-routing test suites resolve the relocated skill files and pass with the same test count and the same assertions as before the move.
-- [ ] Every documentation and code reference to a relocated file points at its new path, and no reference resolves to a path that no longer exists.
-- [ ] References that are already defined as skill-relative continue to resolve correctly without being rewritten to absolute or repository-root paths.
-- [ ] The skill directory is self-contained: copied on its own to another location, the router and eval runner still load their schema, reference documents, and prompts and still run.
-- [ ] No compatibility shim, symbolic link, environment-variable override, or fallback path preserves the old repository-root locations.
+- [x] The installable skill directory contains the skill manifest, its reference documents, the canonical schema, the canonical example, the sample prompts, and the router and eval scripts.
+- [x] The repository root no longer holds a copy of any relocated file, and `README.md`, `tests/`, and `.docs/` remain at the root.
+- [x] The router and eval scripts remain siblings within the skill directory, preserving the sibling resolution the eval runner depends on.
+- [x] The existing router, eval, and mention-routing test suites resolve the relocated skill files and pass with the same test count and the same assertions as before the move.
+- [x] Every documentation and code reference to a relocated file points at its new path, and no reference resolves to a path that no longer exists.
+- [x] References that are already defined as skill-relative continue to resolve correctly without being rewritten to absolute or repository-root paths.
+- [x] The skill directory is self-contained: copied on its own to another location, the router and eval runner still load their schema, reference documents, and prompts and still run.
+- [x] No compatibility shim, symbolic link, environment-variable override, or fallback path preserves the old repository-root locations.
 
 ## Constraints
 

@@ -1,5 +1,5 @@
 ---
-name: agent-world-skill
+name: agent-world
 description: Use when the user intends to create, initialize, run, continue, route, eval, test, verify, validate, confirm, check, smoke-test, inspect, or debug an Agent World workflow, including requests that mention Agent World, agent-world, agent world, world.json, world.eval.md, or command-like forms such as agent-world: init. Treat command-like forms as natural-language requests, not tool calls.
 ---
 

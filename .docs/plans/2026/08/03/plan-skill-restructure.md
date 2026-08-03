@@ -21,7 +21,7 @@ Move the installable Agent World skill from the repository root into `skills/age
 
 - Target layout is `agent-world-studio-mvp.md` §8 exactly: `skills/agent-world/` receives `SKILL.md`, `world.schema.json`, `world.example.json`, `init-agent-world.md`, `eval-agent-world.md`, `mention-routing-rules.md`, `prompts/`, and `scripts/`. `README.md`, `tests/`, `.docs/`, `.gitignore`, and `agent-world-studio-mvp.md` stay at the root.
 - Use `git mv` so history follows each file. Rejected: delete-and-recreate, which loses blame on a 1238-line router for no benefit.
-- **Test files change exactly one line each** — the `skillRoot` expression. Every assertion, fixture, and expectation stays byte-identical. Unchanged assertions passing at the same count is the entire proof that this move changed no behavior; editing a test to make it pass would destroy that proof.
+- **Test files change exactly one functional line each** — the `skillRoot` expression. Every assertion, fixture, and expectation stays byte-identical. Unchanged assertions passing at the same count is the entire proof that this move changed no behavior; editing a test to make it pass would destroy that proof. The Phase 3 `git diff tests/` check verifies this one-line change immediately, before Phase 4 adds the file comment block update each suite requires under the RPD file-comment-block convention; that later comment-only edit is expected and does not reopen the one-line proof already captured in Phase 3.
 - **Skill-relative references in `SKILL.md` are left alone.** They already resolve against the manifest's own directory, which is the property that makes the skill relocatable. Rewriting them to repository-root paths would break the skill exactly when it is installed elsewhere.
 - **Self-containment is verified by copying the skill directory somewhere else and running it there**, not by inspection. A missing sibling only shows up when the surrounding repository is gone.
 - Clean cut, no compatibility surface. Rejected: root shims, symlinks back to the old paths, and an `AGENT_WORLD_SKILL_ROOT` override. Each would preserve a second supported layout forever to spare a one-time re-install, and the REQ names it a non-goal.
@@ -32,47 +32,47 @@ Move the installable Agent World skill from the repository root into `skills/age
 
 ### Phase 1 - Baseline capture
 
-- [ ] Run `node --test tests/` and record the exact per-suite and total pass counts as the pre-move baseline.
-- [ ] Record the complete inventory of root entries, classifying each as skill content, repository scaffolding, or generated/ignored, so nothing is moved or left behind by accident.
-- [ ] Grep the repository for `scripts/agent-world`, `world.schema.json`, `init-agent-world.md`, `eval-agent-world.md`, `mention-routing-rules.md`, `world.example.json`, and `prompts/`, and classify each hit as skill-relative (leave alone), repository-root-relative (must update), or project-relative (unaffected).
-- [ ] Confirm `scripts/agent-world-eval.js:21` is the only cross-script path dependency inside `scripts/`, so sibling placement is the only structural constraint the move must honor.
+- [x] Run `node --test tests/*.test.js` and record the exact per-suite and total pass counts as the pre-move baseline (bare `node --test tests/` fails with `MODULE_NOT_FOUND` on this repo, since `node --test` requires an explicit file glob rather than a directory here). Baseline: eval=2, router=30, mention-routing=25, total=57, all passing.
+- [x] Record the complete inventory of root entries, classifying each as skill content, repository scaffolding, or generated/ignored, so nothing is moved or left behind by accident. Skill content: `SKILL.md`, `world.schema.json`, `world.example.json`, `init-agent-world.md`, `eval-agent-world.md`, `mention-routing-rules.md`, `prompts/`, `scripts/`. Scaffolding: `README.md`, `tests/`, `.docs/`, `.gitignore`, `agent-world-studio-mvp.md`. Generated/ignored: `.agent-world/`, `.claude/`.
+- [x] Grep the repository for `scripts/agent-world`, `world.schema.json`, `init-agent-world.md`, `eval-agent-world.md`, `mention-routing-rules.md`, `world.example.json`, and `prompts/`, and classify each hit as skill-relative (leave alone), repository-root-relative (must update), or project-relative (unaffected). Root-relative hits: README.md lines 10, 32-40, 51, 196 (updated in Phase 3). Skill-relative: SKILL.md's `ROUTER`/`EVAL_REF` definitions and README's own "skill-relative" prose (left unchanged). Project-relative: `.agent-world/prompts/*`, `.agent-world/world.eval.md` references (unaffected).
+- [x] Confirm `scripts/agent-world-eval.js:21` is the only cross-script path dependency inside `scripts/`, so sibling placement is the only structural constraint the move must honor. Confirmed via grep for `__dirname` in both scripts.
 
 ### Phase 2 - Move
 
-- [ ] Create `skills/agent-world/` and `git mv` `SKILL.md`, `world.schema.json`, `world.example.json`, `init-agent-world.md`, `eval-agent-world.md`, and `mention-routing-rules.md` into it.
-- [ ] `git mv` `prompts/` and `scripts/` into `skills/agent-world/`, keeping `agent-world-router.js` and `agent-world-eval.js` as siblings.
-- [ ] Run `git status` and confirm every moved path is staged as a rename rather than as a delete plus an add.
-- [ ] Confirm `README.md`, `tests/`, `.docs/`, `.gitignore`, and `agent-world-studio-mvp.md` remain at the repository root.
+- [x] Create `skills/agent-world/` and `git mv` `SKILL.md`, `world.schema.json`, `world.example.json`, `init-agent-world.md`, `eval-agent-world.md`, and `mention-routing-rules.md` into it.
+- [x] `git mv` `prompts/` and `scripts/` into `skills/agent-world/`, keeping `agent-world-router.js` and `agent-world-eval.js` as siblings.
+- [x] Run `git status` and confirm every moved path is staged as a rename rather than as a delete plus an add. Confirmed: all 13 paths reported as "renamed".
+- [x] Confirm `README.md`, `tests/`, `.docs/`, `.gitignore`, and `agent-world-studio-mvp.md` remain at the repository root. Confirmed via `ls`.
 
 ### Phase 3 - Reference updates
 
-- [ ] Change `skillRoot` in `tests/agent-world-router.test.js:20` to `path.resolve(__dirname, '..', 'skills', 'agent-world')`, changing nothing else in the file.
-- [ ] Apply the same single-line change to `tests/agent-world-eval.test.js:17` and `tests/mention-routing.e2e.test.js:16`.
-- [ ] Run `git diff tests/` and confirm exactly three changed lines across the three suites.
-- [ ] Update the file-map, command, and quick-start sections of `README.md` so every relocated path names its `skills/agent-world/...` location.
-- [ ] Re-run the Phase 1 grep and confirm every repository-root-relative hit now resolves, every skill-relative hit is unchanged, and no hit points at a path that no longer exists.
+- [x] Change `skillRoot` in `tests/agent-world-router.test.js:20` to `path.resolve(__dirname, '..', 'skills', 'agent-world')`, changing nothing else in the file.
+- [x] Apply the same single-line change to `tests/agent-world-eval.test.js:17` and `tests/mention-routing.e2e.test.js:16`.
+- [x] Run `git diff tests/` and confirm exactly three changed lines across the three suites. Confirmed before Phase 4 comment-block updates.
+- [x] Update the file-map, command, and quick-start sections of `README.md` so every relocated path names its `skills/agent-world/...` location.
+- [x] Re-run the Phase 1 grep and confirm every repository-root-relative hit now resolves, every skill-relative hit is unchanged, and no hit points at a path that no longer exists. Confirmed: README.md fully updated; `agent-world-studio-mvp.md` already referenced the target layout; `.docs/` historical docs are out of scope per REQ Non-Goals.
 
 ### Phase 4 - Verification
 
-- [ ] Run `node --test tests/` and confirm the pass counts match the Phase 1 baseline exactly.
-- [ ] Copy `skills/agent-world/` alone to a temporary directory, run the router's `help` command from that copy, and confirm it resolves without reaching back into the repository.
-- [ ] From that same standalone copy, run the eval runner against a temporary project world and confirm it loads the router, the schema, and its prompts.
-- [ ] Confirm no symlink, shim file, or wrapper script was left at the repository root, and that `git status` shows no untracked leftovers from the move.
-- [ ] Add file comment blocks to the three modified test suites recording that `skillRoot` now resolves into `skills/agent-world/`.
+- [x] Run `node --test tests/*.test.js` and confirm the pass counts match the Phase 1 baseline exactly. Result: eval=2, router=30, mention-routing=25, total=57, all passing — matches baseline.
+- [x] Copy `skills/agent-world/` alone to a temporary directory, run the router's `help` command from that copy, and confirm it resolves without reaching back into the repository. Ran from a standalone scratch copy with its own `.agent-world/world.json`; exited 0 with no reference to the original repo path.
+- [x] From that same standalone copy, run the eval runner against a temporary project world and confirm it loads the router, the schema, and its prompts. Ran against a temporary fixture world; result: `Agent World eval PASS`, report written under the temp project's `.agent-world/eval-runs/`.
+- [x] Confirm no symlink, shim file, or wrapper script was left at the repository root, and that `git status` shows no untracked leftovers from the move. Confirmed: no symlinks (`find . -maxdepth 1 -type l` empty); `git status` shows only the expected renames and edits.
+- [x] Add file comment blocks to the three modified test suites recording that `skillRoot` now resolves into `skills/agent-world/`.
 
 ### Phase 5 - Documentation
 
-- [ ] Update `README.md` with a short repository-layout section distinguishing the installable skill directory from repository scaffolding, so the boundary the Studio stories rely on is documented.
-- [ ] Record final evidence for each REQ acceptance criterion, citing the baseline-versus-after test counts, the grep result, and the standalone-copy run.
-- [ ] Mark completed tasks complete only after the corresponding change or evidence exists.
+- [x] Update `README.md` with a short repository-layout section distinguishing the installable skill directory from repository scaffolding, so the boundary the Studio stories rely on is documented.
+- [x] Record final evidence for each REQ acceptance criterion, citing the baseline-versus-after test counts, the grep result, and the standalone-copy run. See VR evidence matrix.
+- [x] Mark completed tasks complete only after the corresponding change or evidence exists.
 
 ## Validation
 
 | Check | Command | Expected evidence |
 | --- | --- | --- |
-| Baseline captured | `node --test tests/` before the move | Per-suite and total pass counts recorded |
-| Behavior unchanged | `node --test tests/` after the move | Counts identical to the baseline; no assertion edited |
-| Minimal test delta | `git diff tests/` | Exactly three changed lines, one per suite, all the `skillRoot` expression |
+| Baseline captured | `node --test tests/*.test.js` before the move | Per-suite and total pass counts recorded |
+| Behavior unchanged | `node --test tests/*.test.js` after the move | Counts identical to the baseline; no assertion edited |
+| Minimal test delta | `git diff tests/` run at the end of Phase 3, before Phase 4 comment-block updates | Exactly three changed lines, one per suite, all the `skillRoot` expression |
 | Move preserved history | `git status` / `git diff --cached -M --stat` | Every moved path reported as a rename |
 | Root is clean | `ls` at the repository root | No relocated file remains; `README.md`, `tests/`, `.docs/`, `.gitignore`, `agent-world-studio-mvp.md` present |
 | Skill is self-contained | `cp -R skills/agent-world <tmp> && node <tmp>/scripts/agent-world-router.js help` | Router runs from the standalone copy |

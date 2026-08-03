@@ -23,10 +23,10 @@ Scenarios are executed against the repository after the move. The standalone sce
 ## Scenario: Existing suites pass unchanged against the new layout
 
 - Given the pre-move per-suite pass counts recorded as a baseline
-- When `node --test tests/` is run after the move
+- When `node --test tests/*.test.js` is run after the move
 - Then every suite passes
 - And the per-suite and total counts equal the recorded baseline
-- And the only difference in the test sources is the single `skillRoot` expression in each of the three suites
+- And the only functional difference in the test sources is the single `skillRoot` expression in each of the three suites, verified via `git diff tests/` immediately after the reference-update phase and before the file comment blocks required by the RPD convention are added
 
 ## Scenario: The router runs from a standalone copy of the skill
 

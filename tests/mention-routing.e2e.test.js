@@ -4,6 +4,9 @@
   These tests drive the router as a separate process with a real temporary
   .agent-world/world.json and persisted state file. They verify complete routing
   outcomes instead of only parser-level behavior.
+
+  Recent changes:
+  - skillRoot now resolves into skills/agent-world/ after the skill-restructure move.
 */
 
 const assert = require('node:assert/strict');
@@ -13,7 +16,7 @@ const os = require('node:os');
 const path = require('node:path');
 const test = require('node:test');
 
-const skillRoot = path.resolve(__dirname, '..');
+const skillRoot = path.resolve(__dirname, '..', 'skills', 'agent-world');
 const router = path.join(skillRoot, 'scripts', 'agent-world-router.js');
 
 function writePromptFiles(worldDir, prompts) {

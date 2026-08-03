@@ -7,7 +7,7 @@ Think of it as a traffic controller:
 - `.agent-world/world.json` says who the agents are and what order they should work in.
 - `.agent-world/world.eval.md` says how to prove the generated world routes correctly.
 - `.agent-world/prompts/*.md` contains the agent system prompts.
-- `scripts/agent-world-router.js` reads that file, remembers the conversation, and decides the next step.
+- `skills/agent-world/scripts/agent-world-router.js` reads that file, remembers the conversation, and decides the next step.
 - The host executor runs one returned instruction at a time.
 - Agents can ask the host to do real work, such as reading files, writing files, or running tests.
 
@@ -27,17 +27,21 @@ For example, an app-building workflow might be:
 
 The agents do not directly run shell commands or edit files. They request host actions, and the host decides whether to perform them.
 
+## Repository Layout
+
+The installable skill is self-contained under `skills/agent-world/`, separate from repository scaffolding (`README.md`, `tests/`, `.docs/`) at the root. Copy `skills/agent-world/` on its own to install the skill elsewhere.
+
 ## Files In This Skill
 
-- `SKILL.md`: instructions for Codex when it acts as the Agent World host executor.
-- `scripts/agent-world-router.js`: the router that loads the world, tracks state, and returns the next instruction.
-- `scripts/agent-world-eval.js`: the deterministic eval harness that validates a generated world contract through the router.
-- `world.example.json`: a sample world definition with product, architecture, implementation, QA, and security agents.
-- `world.schema.json`: the skill-relative JSON Schema that hosts and clients can use to validate `.agent-world/world.json`.
-- `prompts/`: sample prompt files referenced by `world.example.json`.
-- `init-agent-world.md`: required init reference for creating `.agent-world/world.json` from a selected messaging pattern.
-- `eval-agent-world.md`: required eval reference for validating `.agent-world/world.eval.md`.
-- `mention-routing-rules.md`: the standalone mention-routing rule reference.
+- `skills/agent-world/SKILL.md`: instructions for Codex when it acts as the Agent World host executor.
+- `skills/agent-world/scripts/agent-world-router.js`: the router that loads the world, tracks state, and returns the next instruction.
+- `skills/agent-world/scripts/agent-world-eval.js`: the deterministic eval harness that validates a generated world contract through the router.
+- `skills/agent-world/world.example.json`: a sample world definition with product, architecture, implementation, QA, and security agents.
+- `skills/agent-world/world.schema.json`: the skill-relative JSON Schema that hosts and clients can use to validate `.agent-world/world.json`.
+- `skills/agent-world/prompts/`: sample prompt files referenced by `world.example.json`.
+- `skills/agent-world/init-agent-world.md`: required init reference for creating `.agent-world/world.json` from a selected messaging pattern.
+- `skills/agent-world/eval-agent-world.md`: required eval reference for validating `.agent-world/world.eval.md`.
+- `skills/agent-world/mention-routing-rules.md`: the standalone mention-routing rule reference.
 - `tests/agent-world-router.test.js`: router tests.
 - `tests/agent-world-eval.test.js`: deterministic eval runner tests.
 
@@ -48,7 +52,7 @@ Agent World runs inside an agent app such as Codex. Codex is still the model doi
 Example flow:
 
 1. The human asks Codex: `Build an Electron app`.
-2. This skill tells Codex to send that exact message to `scripts/agent-world-router.js`.
+2. This skill tells Codex to send that exact message to `skills/agent-world/scripts/agent-world-router.js`.
 3. The router reads `.agent-world/world.json`, loads the referenced prompt file, sees that the workflow starts with `@pm`, and returns a dynamic instruction containing the `@pm` system prompt, workflow step, and conversation context.
 4. Codex follows that instruction and writes one message as `@pm`, such as a short product brief ending with:
 
@@ -193,7 +197,7 @@ The router owns all of this. Agents should mention the intended next target, but
 
 The skill should route the request through the router script. Codex will then run the first selected agent, send that agent's response back to the router, and continue through the workflow.
 
-You can still start manually by copying `world.example.json` to `.agent-world/world.json` and `prompts/` to `.agent-world/prompts/`. The init flow is the safer default because it forces the workflow choice up front.
+You can still start manually by copying `skills/agent-world/world.example.json` to `.agent-world/world.json` and `skills/agent-world/prompts/` to `.agent-world/prompts/`. The init flow is the safer default because it forces the workflow choice up front.
 
 ## Creating A World
 
