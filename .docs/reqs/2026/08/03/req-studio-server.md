@@ -20,57 +20,57 @@ Studio must never select the next agent, call an agent model, execute a host act
 
 ### Toolchain and packaging
 
-- [ ] Building from source produces the Studio server bundle and the client assets inside the installed skill directory, and the documented build command reproduces both.
-- [ ] The built artifacts are committed and are not excluded by version control ignore rules.
-- [ ] The server bundle runs on the Node.js version the existing scripts and tests target, with no dependency install, no build step, and no transpiler at load time.
-- [ ] Adding the package manifest does not change the module system under which the existing router, eval runner, or test suites load.
-- [ ] Development dependencies are confined to the source tree and are not required at skill runtime.
+- [x] Building from source produces the Studio server bundle and the client assets inside the installed skill directory, and the documented build command reproduces both.
+- [ ] The built artifacts are committed and are not excluded by version control ignore rules. **Incomplete**: `git check-ignore -v` confirms neither artifact path is ignored, but nothing from this story has been `git commit`-ed yet (`git status --short` shows it all untracked/modified) -- committing is deliberately deferred pending an explicit user request (GC), per this repository's "never commit without being asked" rule. Re-check after GC runs.
+- [x] The server bundle runs on the Node.js version the existing scripts and tests target, with no dependency install, no build step, and no transpiler at load time.
+- [x] Adding the package manifest does not change the module system under which the existing router, eval runner, or test suites load.
+- [x] Development dependencies are confined to the source tree and are not required at skill runtime.
 
 ### Launch and lifecycle
 
-- [ ] The skill recognizes a `studio` request and launches the server against the current project directory using only committed artifacts.
-- [ ] Launching resolves the project directory, ensures the Agent World project directory exists, loads the world when present, starts exactly one file watcher, starts one HTTP server bound to the loopback interface, and reports the Studio URL.
-- [ ] Launching against a project that has no world file starts normally and reports the world as absent rather than failing.
-- [ ] The server creates exactly one watcher and one event bus regardless of how many clients connect.
-- [ ] Stopping the server closes the HTTP listener, the file watcher, and every open event-stream response, and leaves no process it started still running.
+- [x] The skill recognizes a `studio` request and launches the server against the current project directory using only committed artifacts.
+- [x] Launching resolves the project directory, ensures the Agent World project directory exists, loads the world when present, starts exactly one file watcher, starts one HTTP server bound to the loopback interface, and reports the Studio URL.
+- [x] Launching against a project that has no world file starts normally and reports the world as absent rather than failing.
+- [x] The server creates exactly one watcher and one event bus regardless of how many clients connect.
+- [x] Stopping the server closes the HTTP listener, the file watcher, and every open event-stream response, and leaves no process it started still running.
 
 ### Ownership boundary
 
-- [ ] The server exposes no endpoint that starts, stops, continues, or otherwise controls a workflow run, and no endpoint that accepts an arbitrary command, path, or shell string from the client.
-- [ ] The server never invokes the router as an execution host; the only router capability it uses is configuration loading and validation.
+- [x] The server exposes no endpoint that starts, stops, continues, or otherwise controls a workflow run, and no endpoint that accepts an arbitrary command, path, or shell string from the client.
+- [x] The server never invokes the router as an execution host; the only router capability it uses is configuration loading and validation.
 
 ### Security
 
-- [ ] Every API request, including the event stream, is rejected unless it carries the session token generated at server start; only the static client assets and the single token-handshake entry point are reachable without it.
-- [ ] The session token is not left in the browser address bar after the handshake completes.
-- [ ] Any request resolving to a path outside the project directory or the installed skill directory is rejected rather than read or written, including paths that escape through a symbolic link.
-- [ ] Every write payload is validated before it reaches the filesystem, and an invalid payload is rejected with an actionable error instead of a partial write.
-- [ ] The server binds only to the loopback interface and to no external interface.
+- [x] Every API request, including the event stream, is rejected unless it carries the session token generated at server start; only the static client assets and the single token-handshake entry point are reachable without it.
+- [x] The session token is not left in the browser address bar after the handshake completes.
+- [x] Any request resolving to a path outside the project directory or the installed skill directory is rejected rather than read or written, including paths that escape through a symbolic link.
+- [x] Every write payload is validated before it reaches the filesystem, and an invalid payload is rejected with an actionable error instead of a partial write.
+- [x] The server binds only to the loopback interface and to no external interface.
 
 ### World reading, validation, and writing
 
-- [ ] Reading a world returns its workflow nodes with their agent, instruction, and prerequisites, its routing edges, its agents with their display name, role, prompt path, and context scope, its world settings, and its persisted visual layout.
-- [ ] Validation reports a world invalid when it violates the canonical schema and when it violates the router's graph rules, covering a missing edge target, a node assigned to an undefined agent, and a prerequisite naming a node that does not exist.
-- [ ] Validation errors identify the offending node, edge, agent, or field, and preserve the underlying message rather than reducing it to a generic failure.
-- [ ] Studio and the router agree on validity: a world the server accepts is a world the existing router loads without error.
-- [ ] A saved world is validated against the schema and against graph references before writing, and is written atomically so a watcher cannot observe a partially written file.
-- [ ] A rejected save leaves the existing world byte-identical and leaves no temporary file behind.
-- [ ] Saving records the written content hash, publishes a save event, and writes visual layout to a separate layout file so no layout metadata appears in the world file.
-- [ ] Reading a world and writing it back unmodified preserves every schema-defined field, including those no editor exposes, and introduces no field the original file omitted.
-- [ ] Prompt content can be read and written for a defined agent, addressed by agent identifier, with the filesystem path resolved from the world rather than supplied by the client.
+- [x] Reading a world returns its workflow nodes with their agent, instruction, and prerequisites, its routing edges, its agents with their display name, role, prompt path, and context scope, its world settings, and its persisted visual layout.
+- [x] Validation reports a world invalid when it violates the canonical schema and when it violates the router's graph rules, covering a missing edge target, a node assigned to an undefined agent, and a prerequisite naming a node that does not exist.
+- [x] Validation errors identify the offending node, edge, agent, or field, and preserve the underlying message rather than reducing it to a generic failure.
+- [x] Studio and the router agree on validity: a world the server accepts is a world the existing router loads without error.
+- [x] A saved world is validated against the schema and against graph references before writing, and is written atomically so a watcher cannot observe a partially written file.
+- [x] A rejected save leaves the existing world byte-identical and leaves no temporary file behind.
+- [x] Saving records the written content hash, publishes a save event, and writes visual layout to a separate layout file so no layout metadata appears in the world file.
+- [x] Reading a world and writing it back unmodified preserves every schema-defined field, including those no editor exposes, and introduces no field the original file omitted.
+- [x] Prompt content can be read and written for a defined agent, addressed by agent identifier, with the filesystem path resolved from the world rather than supplied by the client.
 
 ### Change detection and event stream
 
-- [ ] A change to a watched workflow or prompt file made outside Studio is delivered to connected clients over the event stream without polling, marked as externally sourced.
-- [ ] A change whose content matches the server's own most recent write is marked as Studio-sourced so it raises no conflict.
-- [ ] The event stream stays open across idle periods and emits a periodic heartbeat.
-- [ ] Multiple concurrent clients each receive the same events from the single shared watcher and event bus.
+- [x] A change to a watched workflow or prompt file made outside Studio is delivered to connected clients over the event stream without polling, marked as externally sourced.
+- [x] A change whose content matches the server's own most recent write is marked as Studio-sourced so it raises no conflict.
+- [x] The event stream stays open across idle periods and emits a periodic heartbeat.
+- [x] Multiple concurrent clients each receive the same events from the single shared watcher and event bus.
 
 ### Verification
 
-- [ ] Automated tests cover startup and shutdown, loopback binding, token enforcement, path-traversal rejection, absence of every forbidden run-control and shell endpoint, world reading including the absent-world case, schema and graph-reference validation, atomic save and rejected-save cleanup, round-trip field preservation, layout round-trip, prompt reading and writing, event delivery for external changes, self-write suppression, heartbeat, and single-watcher sharing across clients.
-- [ ] An executable end-to-end specification drives the HTTP and event-stream contract against a temporary project and passes.
-- [ ] A minimal client shell is served from the built assets and demonstrates the session handshake and a live event-stream connection.
+- [x] Automated tests cover startup and shutdown, loopback binding, token enforcement, path-traversal rejection, absence of every forbidden run-control and shell endpoint, world reading including the absent-world case, schema and graph-reference validation, atomic save and rejected-save cleanup, round-trip field preservation, layout round-trip, prompt reading and writing, event delivery for external changes, self-write suppression, heartbeat, and single-watcher sharing across clients.
+- [x] An executable end-to-end specification drives the HTTP and event-stream contract against a temporary project and passes.
+- [x] A minimal client shell is served from the built assets and demonstrates the session handshake and a live event-stream connection.
 
 ## Constraints
 

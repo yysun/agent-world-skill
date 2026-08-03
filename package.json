@@ -1,0 +1,28 @@
+{
+  "name": "agent-world-skill",
+  "private": true,
+  "version": "0.0.0",
+  "scripts": {
+    "build:server": "node scripts/build-server.mjs",
+    "build:client": "vite build",
+    "build": "npm run build:server && npm run build:client",
+    "pretest": "npm run build",
+    "test": "node --test tests/*.test.js tests/studio/*.test.js",
+    "typecheck": "tsc --noEmit"
+  },
+  "devDependencies": {
+    "@types/express": "^5.0.0",
+    "@types/node": "^22.10.0",
+    "@types/react": "^18.3.12",
+    "@types/react-dom": "^18.3.1",
+    "@vitejs/plugin-react": "^4.3.4",
+    "ajv": "^8.20.0",
+    "chokidar": "^5.0.0",
+    "esbuild": "^0.28.1",
+    "express": "^5.2.1",
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1",
+    "typescript": "^5.9.3",
+    "vite": "^5.4.20"
+  }
+}

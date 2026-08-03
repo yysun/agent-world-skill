@@ -1,3 +1,4 @@
 .DS_Store
 .agent-world/
 *.log
+node_modules/

@@ -1,6 +1,6 @@
 ---
 name: agent-world
-description: Use when the user intends to create, initialize, run, continue, route, eval, test, verify, validate, confirm, check, smoke-test, inspect, or debug an Agent World workflow, including requests that mention Agent World, agent-world, agent world, world.json, world.eval.md, or command-like forms such as agent-world: init. Treat command-like forms as natural-language requests, not tool calls.
+description: Use when the user intends to create, initialize, run, continue, route, eval, test, verify, validate, confirm, check, smoke-test, inspect, or debug an Agent World workflow, or to open, launch, or start Agent World Studio (a local visual workflow editor and observer), including requests that mention Agent World, agent-world, agent world, world.json, world.eval.md, Studio, agent-world studio, or command-like forms such as agent-world: init or agent-world: studio. Treat command-like forms as natural-language requests, not tool calls.
 ---
 
 # Agent World Skill
@@ -204,3 +204,17 @@ Only reset when explicitly asked:
 ```bash
 node "$ROUTER" reset
 ```
+
+## Studio
+
+When the user asks to open, launch, or start Agent World Studio, do not start the router loop. Launching Studio is not the same as launching an Agent World workflow: Studio is a local, loopback-bound service that lets a person read, validate, and edit `.agent-world/world.json` and its prompt files, and observe live file changes. It never selects an agent, calls a model, executes a host action, or runs a workflow turn.
+
+Treat shorthand command forms such as `agent-world: studio`, `agent-world studio`, `open studio`, and `start agent world studio` as Studio launch requests, not tool calls.
+
+Launch it from the project/world cwd using only the committed build artifact (no install, no build step):
+
+```bash
+node "$SKILL_DIR/scripts/agent-world-studio.js" --project "$PWD"
+```
+
+`SKILL_DIR` resolves the same way `ROUTER` does: skill-relative, against the directory containing this `SKILL.md`. The command prints the Studio URL, including the one-time session token, to stdout. Report that URL to the user; do not open it yourself.

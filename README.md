@@ -29,7 +29,7 @@ The agents do not directly run shell commands or edit files. They request host a
 
 ## Repository Layout
 
-The installable skill is self-contained under `skills/agent-world/`, separate from repository scaffolding (`README.md`, `tests/`, `.docs/`) at the root. Copy `skills/agent-world/` on its own to install the skill elsewhere.
+The installable skill is self-contained under `skills/agent-world/`, separate from repository scaffolding (`README.md`, `tests/`, `.docs/`, `src/`) at the root. Copy `skills/agent-world/` on its own to install the skill elsewhere -- this includes the committed Studio build artifacts (`skills/agent-world/scripts/agent-world-studio.js` and `skills/agent-world/studio/dist/`), which need no `npm install` or build step to run. `src/studio/` holds the Studio TypeScript source that produces those artifacts via `npm run build`; it is repository scaffolding, not part of the installed skill.
 
 ## Files In This Skill
 
@@ -42,8 +42,12 @@ The installable skill is self-contained under `skills/agent-world/`, separate fr
 - `skills/agent-world/init-agent-world.md`: required init reference for creating `.agent-world/world.json` from a selected messaging pattern.
 - `skills/agent-world/eval-agent-world.md`: required eval reference for validating `.agent-world/world.eval.md`.
 - `skills/agent-world/mention-routing-rules.md`: the standalone mention-routing rule reference.
+- `skills/agent-world/scripts/agent-world-studio.js`: the committed, bundled Studio server artifact (built from `src/studio/server/`); runs with plain `node`, no install or build step.
+- `skills/agent-world/studio/dist/`: the committed, built Studio client assets (built from `src/studio/client/` via Vite).
+- `src/studio/`: Studio's TypeScript source (`shared/`, `server/`, `client/`); not part of the installed skill, only its build inputs.
 - `tests/agent-world-router.test.js`: router tests.
 - `tests/agent-world-eval.test.js`: deterministic eval runner tests.
+- `tests/studio/*.test.js`: Studio server tests, run against the built artifact.
 
 ## How It Works
 
@@ -241,6 +245,28 @@ node "$SKILL_DIR/scripts/agent-world-eval.js" \
 ```
 
 The runner loads the world config, validates prompt and graph contracts, parses fenced `json` routing cases from `world.eval.md`, drives the router through file-based handoff, and writes a report under `.agent-world/eval-runs/`. It does not call a live model. Semantic smoke tests belong in the eval contract as optional advisory checks and must be reported separately.
+
+## Agent World Studio
+
+Studio is a local, loopback-bound service for reading, validating, and editing `.agent-world/world.json` and its prompt files, and for observing live file changes. Studio designs and observes; the agent host still owns execution. It never selects an agent, calls a model, executes a host action, or runs a workflow turn, and it exposes no endpoint that could start, stop, or continue a run.
+
+Launch it from the project/world cwd using only the committed build artifact -- no install, no build step:
+
+```bash
+node "$SKILL_DIR/scripts/agent-world-studio.js" --project "$PWD"
+```
+
+It prints a `http://127.0.0.1:<port>/?token=<token>` URL. Opening it completes a one-time handshake (the token exchanges for an `HttpOnly; SameSite=Strict` session cookie, then the address bar drops the token) and loads the client shell, which shows the resolved workspace and a live event-stream connection.
+
+Implemented endpoints, all requiring the session cookie except the `/` handshake and the static client assets:
+
+- `GET /api/workspace`: the resolved project root and whether a world is loaded.
+- `GET /api/world` / `PUT /api/world`: read and atomically save `.agent-world/world.json` plus its layout, validated against both the canonical schema and the router's own graph rules before anything is written.
+- `POST /api/validate`: validate a candidate world without saving it.
+- `GET /api/prompts/:agentId` / `PUT /api/prompts/:agentId`: read and write an agent's prompt file, addressed by agent id with the path resolved from the world, not supplied by the client.
+- `GET /api/events`: a Server-Sent Events stream of file changes, saves, and validation results, shared by every connected client from one file watcher.
+
+Visual layout (node positions, viewport) lives only in `.agent-world/world.layout.json`; `.agent-world/world.json` remains the semantic source of truth and never carries layout data.
 
 ## The Short Version
 
