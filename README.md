@@ -268,6 +268,28 @@ Implemented endpoints, all requiring the session cookie except the `/` handshake
 
 Visual layout (node positions, viewport) lives only in `.agent-world/world.layout.json`; `.agent-world/world.json` remains the semantic source of truth and never carries layout data.
 
+### The Design surface
+
+Opening the printed URL loads the editor: a canvas rendering the workflow as a graph, with solid arrows for allowed routing edges and dashed arrows for `requires` prerequisites, and the entry node marked. A project with no world file yet opens as an empty, editable canvas with an affordance to create the first node and agent, rather than an error.
+
+From the canvas and its side panels, a user can:
+
+- Add, delete, and connect or disconnect workflow nodes and routing edges.
+- Assign a node's agent, edit its instruction and `requires` prerequisites, and choose the workflow entry.
+- Add, rename, and delete agents, and edit an agent's display name, role, prompt path, and context scope.
+- Edit world-level settings: identifier, name, turn limit, stop token, and mode.
+- Open and edit an agent's prompt Markdown file, and view the current in-memory world as raw JSON.
+- Run automatic layout on demand (never automatically); manually dragged positions and the last viewport are restored the next time Studio opens the same project.
+- Save through the server, which is the only path that can reject an edit; a rejected save is reported as a failure and never discards the edit. Validation errors are shown against the specific node, edge, agent, or field they name, not only as a generic failure.
+- Handle a file changed outside Studio: silently, if there are no unsaved edits; otherwise Studio offers Reload, Compare (a side-by-side diff), or Keep Studio Version.
+- Reconnect the event stream on its own after a transient drop, while the server process keeps running. A restarted server process is a different case: it mints a fresh session token per launch, so the browser cannot recover the old session on its own; the client shows a clear "session expired" message telling you to reopen the newly printed URL rather than hanging silently.
+
+Deleting a node also removes it from every routing edge and every other node's `requires`; deleting an agent still assigned to a node is refused rather than silently orphaning that node. Both node and agent deletion are confirmed first, naming what else will be removed.
+
+One constraint carries over from the server: creating a brand-new agent whose prompt file does not exist anywhere in the project cannot be completed by the client alone, because the server's prompt endpoints resolve an agent from the world already saved on disk, and a save itself requires every agent's prompt file to already exist. The first save for such an agent fails with a validation error naming the missing prompt path until that file exists by some other means (a project template, or creating it directly); the created node and agent remain in the canvas, editable, rather than being discarded.
+
+This Design surface is the only mode implemented so far. Run observation (live execution state, the event timeline, active-node highlighting) and run History (past runs, snapshots, replay) are separate, not-yet-built surfaces; no run, stop, or continue control exists anywhere in the current client.
+
 ## The Short Version
 
 Agent World turns a loose multi-agent conversation into a controlled workflow.

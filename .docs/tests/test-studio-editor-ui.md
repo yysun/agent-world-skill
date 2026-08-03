@@ -2,7 +2,7 @@
 
 Covers the user-facing workflow design surface: rendering, graph editing, property panels, prompts, layout, validation feedback, and external-change conflicts.
 
-Scenarios marked **(automated)** run in `tests/studio/` against the pure graph-model and mutation modules, with no browser. All others are performed by a human against a running Studio and their expected observations recorded.
+Scenarios marked **(automated)** run in `tests/studio/` against the pure graph-model and mutation modules, with no browser, as part of the checked-in `npm test` suite. All others are executed during the RPD `ET` stage against a running Studio instance using available browser-automation tooling, with each expected observation recorded as met or not.
 
 ---
 
@@ -27,6 +27,21 @@ Scenarios marked **(automated)** run in `tests/studio/` against the pure graph-m
 - When the graph is derived
 - Then every node receives a position
 - And the fallback positions are deterministic for the same input
+
+## Scenario: A new node starts referentially clean (automated)
+
+- Given a world document with existing nodes, edges, and `requires`
+- When a new node is added through the mutation module
+- Then the new node appears in `workflow.nodes` with no incident routing edges and no `requires`
+- And no existing node, edge, or `requires` entry is changed
+
+## Scenario: A new agent starts unassigned (automated)
+
+- Given a world document with existing agents
+- When a new agent is added through the mutation module with a `promptPath`
+- Then the new agent appears in `agents` with the supplied `promptPath`
+- And no existing workflow node is assigned to it
+- And no existing agent is changed
 
 ## Scenario: Deleting a node removes every reference to it (automated)
 
@@ -97,9 +112,16 @@ Scenarios marked **(automated)** run in `tests/studio/` against the pure graph-m
 
 ## Scenario: The first save from an empty workspace succeeds
 
-- Given Studio open on a project that had no world file
+- Given Studio open on a project that had no world file, whose `.agent-world/prompts/` already contains the file the new agent's prompt path will point to (REQ Constraints: the server cannot create that file through the client alone)
 - When a node and an agent are created, the entry is set, and the world is saved
 - Then the save succeeds
+
+## Scenario: The first save fails clearly when the new agent's prompt file does not exist
+
+- Given Studio open on a project that had no world file and no existing prompt files
+- When a node and an agent are created, the entry is set, and the world is saved
+- Then the save fails and the validation banner names the missing prompt path
+- And the created node and agent remain in the canvas, editable, rather than being discarded
 - And reopening Studio on that project shows the saved workflow
 
 ## Scenario: Editing the graph and saving produces a valid world
@@ -202,6 +224,15 @@ Scenarios marked **(automated)** run in `tests/studio/` against the pure graph-m
 - And choosing Keep Studio Version retains the unsaved edits
 - And choosing Reload replaces the in-memory world with the version on disk
 
+## Scenario: Compare shows a read-only diff without discarding edits
+
+- Given Studio open with unsaved edits to the workflow, and the world file modified outside Studio while those edits are unsaved
+- When Compare is chosen from the conflict prompt
+- Then a read-only two-column diff appears showing the in-memory Studio version alongside the on-disk external version
+- And the changed top-level sections are visually highlighted
+- And no edit control in the diff view can change either side
+- And after closing Compare, the unsaved edits are still present and no reload has happened
+
 ## Scenario: External change without unsaved work reloads silently
 
 - Given Studio open with no unsaved edits
@@ -216,9 +247,16 @@ Scenarios marked **(automated)** run in `tests/studio/` against the pure graph-m
 - Then no external-change conflict prompt appears
 - And the workspace remains in a clean, non-dirty state
 
-## Scenario: The client reconnects after the stream drops
+## Scenario: The client reconnects after a transient stream drop
 
-- Given Studio open and connected
-- When the Studio server is restarted while the tab stays open
+- Given Studio open and connected, with the same server process still running
+- When the event stream connection drops and the server becomes reachable again (a transient network interruption)
 - Then the client reconnects on its own without a manual page refresh
 - And a subsequent external file change is reflected in the interface
+
+## Scenario: A server restart surfaces a clear session-expired message
+
+- Given Studio open and connected
+- When the Studio server process is restarted (its session token is freshly randomized per launch, an existing server behavior this story does not change)
+- Then the client does not silently fail or retry forever
+- And the interface shows a session-expired message directing the user to reopen the newly printed URL
