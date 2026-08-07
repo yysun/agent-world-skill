@@ -1,6 +1,6 @@
-/* Studio client styles: canvas, node cards, and property panels. Grows with
-   each editor phase (Canvas in Phase 3, panels in Phase 5, prompts/raw view
-   in Phase 6, conflict UI in Phase 7). */
+/* Studio client styles for the canvas, four-side connection anchors, node
+   cards, property panels, prompts/raw views, and conflict UI. Node widths
+   align with ELK geometry while React Flow measures content-driven height. */
 
 html, body, #root {
   height: 100%;
@@ -36,7 +36,9 @@ body {
   border-radius: 6px;
   background: #fff;
   padding: 0.5rem 0.75rem;
-  min-width: 160px;
+  box-sizing: border-box;
+  width: 200px;
+  min-height: 90px;
   font-size: 0.85rem;
 }
 
@@ -58,7 +60,8 @@ body {
 
 .studio-node--human {
   border-style: dashed;
-  min-width: 80px;
+  width: 106px;
+  min-height: 34px;
   text-align: center;
   color: #444;
 }
@@ -215,4 +218,3 @@ body {
   font-size: 11px;
   cursor: pointer;
 }
-

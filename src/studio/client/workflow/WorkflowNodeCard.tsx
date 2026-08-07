@@ -1,10 +1,11 @@
-// Custom React Flow node renderer for a workflow node: identifier, assigned
-// agent, agent role, and an instruction preview (REQ Acceptance Criteria ->
-// Rendering), plus an entry badge when this node is the workflow entry.
+// Custom React Flow renderer for a workflow node: identifier, assigned
+// agent, role, instruction preview, entry/error state, and one connection
+// handle on each border for dynamic closest-anchor edge routing.
 // Deliberately renders no execution status (idle/running/completed/...):
 // those belong to run observation, out of scope for this story (REQ
 // Non-Goals).
 import { Handle, Position, type NodeProps } from '@xyflow/react';
+import { ANCHOR_SIDES, type AnchorSide } from './anchors.js';
 
 export interface WorkflowNodeData {
   agentId?: string;
@@ -15,12 +16,21 @@ export interface WorkflowNodeData {
   [key: string]: unknown;
 }
 
+const HANDLE_POSITIONS: Record<AnchorSide, Position> = {
+  top: Position.Top,
+  right: Position.Right,
+  bottom: Position.Bottom,
+  left: Position.Left
+};
+
 export function WorkflowNodeCard({ id, data }: NodeProps): JSX.Element {
   const nodeData = data as WorkflowNodeData;
   const hasError = !!nodeData.errorMessages?.length;
   return (
     <div className={`studio-node${nodeData.isEntry ? ' studio-node--entry' : ''}${hasError ? ' studio-node--error' : ''}`}>
-      <Handle type="target" position={Position.Top} />
+      {ANCHOR_SIDES.map(side => (
+        <Handle key={side} id={side} type="source" position={HANDLE_POSITIONS[side]} />
+      ))}
       {nodeData.isEntry && <span className="studio-node__entry-badge">Entry</span>}
       <div className="studio-node__id">{id}</div>
       <div className="studio-node__agent">{nodeData.agentId ?? '(unassigned)'}</div>
@@ -31,7 +41,6 @@ export function WorkflowNodeCard({ id, data }: NodeProps): JSX.Element {
           {nodeData.errorMessages!.join('; ')}
         </div>
       )}
-      <Handle type="source" position={Position.Bottom} />
     </div>
   );
 }
