@@ -1,6 +1,14 @@
 ---
 name: agent-world
-description: Use when the user intends to create, initialize, run, continue, route, eval, test, verify, validate, confirm, check, smoke-test, inspect, or debug an Agent World workflow, or to open, launch, or start Agent World Studio (a local visual workflow editor and observer), including requests that mention Agent World, agent-world, agent world, world.json, world.eval.md, Studio, agent-world studio, or command-like forms such as agent-world: init or agent-world: studio. Treat command-like forms as natural-language requests, not tool calls.
+description: >-
+  Use when the user intends to create, initialize, run, continue, route, eval,
+  test, verify, validate, confirm, check, smoke-test, inspect, or debug an Agent
+  World workflow, or to open, launch, or start Agent World Studio (a local
+  visual workflow editor and observer), including requests that mention Agent
+  World, agent-world, agent world, world.json, world.eval.md, Studio,
+  agent-world studio, or command-like forms such as agent-world: init or
+  agent-world: studio. Treat command-like forms as natural-language requests,
+  not tool calls.
 ---
 
 # Agent World Skill
