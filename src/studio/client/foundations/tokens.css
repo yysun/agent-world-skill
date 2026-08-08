@@ -1,0 +1,82 @@
+/* ============================================================
+   AI Inbox — Design Tokens
+   Three themes: Studio (default), Blueprint, Paper.
+   Apply a theme by putting .app.theme-<name> on a root element
+   and setting --accent inline.
+   ============================================================ */
+
+/* ---- theme tokens ----------------------------------------- */
+.app {
+  /* Studio (default) */
+  --bg: #f7f7f8;
+  --grid-dot: #d9d9de;
+  --surface: #ffffff;
+  --surface-2: #fafafa;
+  --border: #e4e4e7;
+  --border-strong: #d4d4d8;
+  --text: #18181b;
+  --text-2: #52525b;
+  --text-3: #8e8e98;
+  --radius: 10px;
+  --radius-sm: 7px;
+  --shadow: 0 1px 2px rgba(24,24,27,.05), 0 4px 16px -6px rgba(24,24,27,.08);
+  --shadow-lg: 0 2px 6px rgba(24,24,27,.06), 0 16px 40px -12px rgba(24,24,27,.16);
+  --edge: #c9c9d0;
+  --edge-faint: #dededf;
+  --font-display: "Geist", sans-serif;
+  --display-weight: 600;
+  --display-spacing: -0.01em;
+  --good: #1a8a5c;
+  --warn: #b97a0e;
+
+  --accent-soft: color-mix(in oklab, var(--accent) 9%, var(--surface));
+  --accent-border: color-mix(in oklab, var(--accent) 32%, var(--border));
+  --accent-text: color-mix(in oklab, var(--accent) 85%, var(--text));
+
+  position: fixed; inset: 0;
+  display: flex; flex-direction: column;
+  background: var(--bg);
+  color: var(--text);
+}
+
+.app.theme-blueprint {
+  --bg: #eef1f4;
+  --grid-dot: #ccd4dc;
+  --surface: #fbfcfd;
+  --surface-2: #f2f4f7;
+  --border: #d4dbe2;
+  --border-strong: #b9c3cd;
+  --text: #16202b;
+  --text-2: #46586a;
+  --text-3: #7c8da0;
+  --radius: 4px;
+  --radius-sm: 3px;
+  --shadow: 0 0 0 1px rgba(22,32,43,.02);
+  --shadow-lg: 0 12px 32px -10px rgba(22,32,43,.18);
+  --edge: #aebbc8;
+  --edge-faint: #cdd6df;
+  --font-display: "Geist Mono", ui-monospace, monospace;
+  --display-weight: 500;
+  --display-spacing: -0.02em;
+}
+
+.app.theme-paper {
+  --bg: #faf7f1;
+  --grid-dot: #e3dccd;
+  --surface: #fffefa;
+  --surface-2: #f8f5ee;
+  --border: #e9e2d3;
+  --border-strong: #d8cfba;
+  --text: #292419;
+  --text-2: #6b6353;
+  --text-3: #9c937f;
+  --radius: 14px;
+  --radius-sm: 9px;
+  --shadow: 0 1px 2px rgba(60,50,30,.05), 0 6px 20px -8px rgba(60,50,30,.12);
+  --shadow-lg: 0 2px 6px rgba(60,50,30,.06), 0 20px 48px -14px rgba(60,50,30,.2);
+  --edge: #d3c9b4;
+  --edge-faint: #e3dccb;
+  --font-display: "Lora", Georgia, serif;
+  --display-weight: 550;
+  --display-spacing: 0;
+}

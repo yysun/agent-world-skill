@@ -10,7 +10,7 @@ export function EmptyWorkspace({ onCreateFirstNode }: EmptyWorkspaceProps): JSX.
   return (
     <div className="studio-canvas studio-canvas--empty">
       <p>This project has no workflow yet.</p>
-      <button type="button" onClick={onCreateFirstNode}>
+      <button type="button" className="studio-btn--primary" onClick={onCreateFirstNode}>
         Create the first node and agent
       </button>
     </div>

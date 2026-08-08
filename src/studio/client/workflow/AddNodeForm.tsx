@@ -30,6 +30,7 @@ export function AddNodeForm({ agentIds, existingNodeIds, onAdd }: AddNodeFormPro
       </select>
       <button
         type="button"
+        className="studio-btn--primary"
         disabled={!canAdd}
         onClick={() => {
           onAdd(nodeId, agentId);

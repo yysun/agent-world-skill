@@ -70,7 +70,7 @@ export function NodePanel({
         <label>Requires</label>
         {otherNodeIds.length === 0 && <p>No other nodes.</p>}
         {otherNodeIds.map(id => (
-          <label key={id} style={{ display: 'block', fontWeight: 'normal' }}>
+          <label key={id} className="studio-checkbox-row">
             <input type="checkbox" checked={requires.includes(id)} onChange={() => toggleRequires(id)} /> {id}
           </label>
         ))}
@@ -83,7 +83,7 @@ export function NodePanel({
       </div>
 
       <div className="studio-field">
-        <button type="button" onClick={onRequestDelete}>
+        <button type="button" className="studio-btn--danger" onClick={onRequestDelete}>
           Delete node
         </button>
       </div>

@@ -212,6 +212,7 @@ export function App(): JSX.Element {
   const nodeIds = world.doc ? Object.keys(world.doc.workflow.nodes) : [];
 
   return (
+    <div className="app">
     <div className="studio-layout">
       <main style={{ flex: 1, display: 'flex', flexDirection: 'column', minWidth: 0 }}>
         <header className="studio-toolbar">
@@ -244,7 +245,12 @@ export function App(): JSX.Element {
             </button>
           )}
           {world.doc && (
-            <button type="button" onClick={() => world.save()} disabled={world.saving || !world.dirty}>
+            <button
+              type="button"
+              className="studio-btn--primary"
+              onClick={() => world.save()}
+              disabled={world.saving || !world.dirty}
+            >
               {world.saving ? 'Saving...' : 'Save'}
             </button>
           )}
@@ -368,6 +374,7 @@ export function App(): JSX.Element {
           onClose={() => setShowCompare(false)}
         />
       )}
+    </div>
     </div>
   );
 }

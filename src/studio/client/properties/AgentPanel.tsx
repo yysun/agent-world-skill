@@ -46,10 +46,19 @@ export function AgentPanel({
       <ul>
         {agentIds.map(id => (
           <li key={id}>
-            <button type="button" onClick={() => onSelectAgent(id === selectedAgentId ? null : id)}>
+            <button
+              type="button"
+              aria-pressed={id === selectedAgentId}
+              onClick={() => onSelectAgent(id === selectedAgentId ? null : id)}
+            >
               {id}
             </button>
-            <button type="button" onClick={() => onRequestDeleteAgent(id)} aria-label={`Delete agent ${id}`}>
+            <button
+              type="button"
+              className="studio-btn--danger"
+              onClick={() => onRequestDeleteAgent(id)}
+              aria-label={`Delete agent ${id}`}
+            >
               Delete
             </button>
           </li>
@@ -118,6 +127,7 @@ export function AgentPanel({
       </div>
       <button
         type="button"
+        className="studio-btn--primary"
         disabled={!newAgentIdValid || newAgentIdTaken || newPromptPath.length === 0}
         onClick={() => {
           onAddAgent(newAgentId, newPromptPath);

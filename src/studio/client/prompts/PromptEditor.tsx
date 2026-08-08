@@ -93,7 +93,7 @@ export function PromptEditor({ agentId, onClose }: PromptEditorProps): JSX.Eleme
           <button type="button" onClick={onClose}>
             Close
           </button>
-          <button type="button" onClick={handleSave} disabled={!dirty}>
+          <button type="button" className="studio-btn--primary" onClick={handleSave} disabled={!dirty}>
             Save prompt
           </button>
         </div>
