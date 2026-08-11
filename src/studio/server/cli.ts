@@ -20,8 +20,28 @@ import { createServer } from './server.js';
 // warns is empty once bundled to the CJS format the no-install build target
 // requires). They resolve to this file's actual on-disk location at
 // runtime: <skill-dir>/scripts/agent-world-studio.js once built.
-const SKILL_DIR = path.resolve(__dirname, '..');
+// STUDIO_SKILL_DIR is a dev-only seam (scripts/dev.mjs), alongside
+// STUDIO_HEARTBEAT_INTERVAL_MS below: it lets the dev loop run a scratch
+// build of this file from outside the skill directory while still resolving
+// world.schema.json and the router from the real one. Unset in every
+// installed use, where __dirname is <skill-dir>/scripts.
+const SKILL_DIR = process.env.STUDIO_SKILL_DIR
+  ? path.resolve(process.env.STUDIO_SKILL_DIR)
+  : path.resolve(__dirname, '..');
 const CLIENT_DIST_DIR = path.join(SKILL_DIR, 'studio', 'dist');
+
+// Also dev-only: a fixed session token so restarting the server mid-edit
+// doesn't invalidate the browser's cookie. Ignored unless it is at least as
+// long as a generated token, so a weak value can't quietly replace one.
+function devSessionToken(): string | undefined {
+  const token = process.env.STUDIO_SESSION_TOKEN;
+  if (!token) return undefined;
+  if (!/^[A-Za-z0-9_-]{48,}$/.test(token)) {
+    console.error('Ignoring STUDIO_SESSION_TOKEN: expected at least 48 url-safe characters.');
+    return undefined;
+  }
+  return token;
+}
 
 interface CliArgs {
   project: string;
@@ -41,6 +61,12 @@ function parseArgs(argv: string[]): CliArgs {
       port = Number(argv[++i]);
     } else if (arg === '--no-open') {
       open = false;
+    } else if (arg === '--') {
+      // npm run dev -- -- ../dir leaves a bare separator in argv; skip it.
+      continue;
+    } else if (!arg.startsWith('-')) {
+      // Positional form: `agent-world-studio ../some-project`.
+      project = arg;
     }
   }
   return { project, port, open };
@@ -70,7 +96,12 @@ export async function main(argv = process.argv.slice(2)): Promise<{ url: string;
   const heartbeatOverride = Number(process.env.STUDIO_HEARTBEAT_INTERVAL_MS);
   const bus = new EventBus(Number.isFinite(heartbeatOverride) && heartbeatOverride > 0 ? heartbeatOverride : undefined);
   const watcher = new Watcher(workspace, bus);
-  const { app, sessionToken } = createServer({ workspace, bus, clientDistDir: CLIENT_DIST_DIR });
+  const { app, sessionToken } = createServer({
+    workspace,
+    bus,
+    clientDistDir: CLIENT_DIST_DIR,
+    sessionToken: devSessionToken()
+  });
 
   const server = http.createServer(app);
   await new Promise<void>((resolve, reject) => {

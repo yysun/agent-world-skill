@@ -171,7 +171,14 @@ export class Workspace {
     }
 
     const content = JSON.stringify(doc, null, 2) + '\n';
-    const tmpPath = path.join(this.agentWorldDir, `${WORLD_FILENAME}.validate-${process.pid}-${Date.now()}.tmp`);
+    // Random suffix, not a timestamp: the client validates on edit, so two
+    // requests can land in the same millisecond, and a shared temp path made
+    // one call delete the file the other was still validating -- surfacing as
+    // "Missing Agent World config: ...world.json.validate-<pid>-<ms>.tmp".
+    const tmpPath = path.join(
+      this.agentWorldDir,
+      `${WORLD_FILENAME}.validate-${process.pid}-${crypto.randomBytes(8).toString('hex')}.tmp`
+    );
     await fsp.writeFile(tmpPath, content, 'utf8');
     try {
       return this.validator.validatePath(tmpPath);

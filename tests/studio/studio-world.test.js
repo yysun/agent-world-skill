@@ -241,3 +241,29 @@ test('round-tripping preserves fields no editor exposes and introduces no inject
     assert.equal('mode' in written.world, false);
   });
 });
+
+test('concurrent validations do not clobber each other', async () => {
+  const project = makeProject();
+  await withStudio(project, async ({ handle, cookie }) => {
+    // The client validates as the user edits, so several requests can be in
+    // flight within the same millisecond. Each needs its own scratch file:
+    // when they shared one, the first to finish deleted the file the others
+    // were still reading, and they failed with "Missing Agent World config:
+    // ...world.json.validate-<pid>-<ms>.tmp" instead of a real result.
+    const results = await Promise.all(
+      Array.from({ length: 24 }, () =>
+        fetch(`${handle.origin}/api/validate`, {
+          method: 'POST',
+          headers: { Cookie: cookie, 'Content-Type': 'application/json' },
+          body: JSON.stringify({ world: defaultWorld() })
+        }).then(res => res.json())
+      )
+    );
+    for (const body of results) {
+      assert.equal(body.valid, true, JSON.stringify(body.errors));
+    }
+    // Every scratch file is cleaned up, whatever the interleaving was.
+    const leftovers = fs.readdirSync(path.join(project, '.agent-world')).filter(name => name.endsWith('.tmp'));
+    assert.deepEqual(leftovers, []);
+  });
+});

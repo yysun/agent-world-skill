@@ -256,6 +256,22 @@ Launch it from the project/world cwd using only the committed build artifact -- 
 node "$SKILL_DIR/scripts/agent-world-studio.js" --project "$PWD"
 ```
 
+`--project` is optional in this form: the project directory can also be given positionally (`node "$SKILL_DIR/scripts/agent-world-studio.js" ../some-project`), and defaults to the cwd.
+
+When working on Studio itself from this repository, `npm run dev` launches it against a target project with a live client:
+
+```bash
+npm run dev -- ../test-dir
+```
+
+The client is served by a vite dev server with HMR straight from `src/studio/client/` -- no bundle and no dist -- while the API server is bundled to the gitignored `.dev/` and restarted when its sources change. Vite proxies `/api` and the `?token=` handshake to it, so the browser sees a single origin and the session cookie behaves exactly as it does in a released build. The session token is fixed for the life of the dev loop, so a server restart does not expire the browser session; the printed URL stays good.
+
+The committed build artifacts are never written during development -- they stay as last released until `npm run build`, which is what a release run should commit. `--port` sets the browser-facing port (otherwise a free one is chosen), `--no-open` skips opening a browser, and every other argument is forwarded to the Studio CLI.
+
+The target directory defaults to `.`, the directory the command was run from, so plain `npm run dev` opens Studio on the current project. A relative target resolves against that same directory rather than against the repository root, which is where npm itself runs the script from.
+
+Two environment variables exist only for that dev loop and are unset in any installed use: `STUDIO_SKILL_DIR`, which points a scratch build back at the real skill directory for `world.schema.json` and the router, and `STUDIO_SESSION_TOKEN`, which pins the session token (ignored unless it is at least 48 url-safe characters).
+
 It prints a `http://127.0.0.1:<port>/?token=<token>` URL. Opening it completes a one-time handshake (the token exchanges for an `HttpOnly; SameSite=Strict` session cookie, then the address bar drops the token) and loads the client shell, which shows the resolved workspace and a live event-stream connection.
 
 Implemented endpoints, all requiring the session cookie except the `/` handshake and the static client assets:
