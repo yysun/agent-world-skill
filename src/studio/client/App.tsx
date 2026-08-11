@@ -50,6 +50,13 @@ interface WorkspaceInfo {
   hasWorld: boolean;
 }
 
+// The toolbar has little room, so only the project's folder name is shown
+// there; the full path is still available via the element's title tooltip.
+function projectRootLabel(projectRoot: string): string {
+  const segments = projectRoot.split(/[/\\]+/).filter(Boolean);
+  return segments[segments.length - 1] ?? projectRoot;
+}
+
 type ConnectionStatus = 'connecting' | 'connected' | 'disconnected' | 'session-expired';
 
 type PendingDelete =
@@ -218,7 +225,9 @@ export function App(): JSX.Element {
         <header className="studio-toolbar">
           <strong>Agent World Studio</strong>
           {workspaceError && <span role="alert">{workspaceError}</span>}
-          {workspace && <span>{workspace.projectRoot}</span>}
+          {workspace && (
+            <span title={workspace.projectRoot}>{projectRootLabel(workspace.projectRoot)}</span>
+          )}
           <span role={status === 'session-expired' ? 'alert' : undefined}>
             {status === 'session-expired'
               ? 'Event stream: session expired -- relaunch Studio and open the new URL to reconnect.'
