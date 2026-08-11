@@ -86,6 +86,24 @@ test('nodes absent from the layout still receive positions', () => {
   assert.deepEqual(n2.position, { x: 500, y: 500 });
 });
 
+test('the schema-valid node id __proto__ uses fallback or persisted layout data, never object inheritance', () => {
+  const { deriveGraph } = loadWorkflow();
+  const world = baseWorld();
+  Object.defineProperty(world.workflow.nodes, '__proto__', {
+    value: { agent: 'pm', instruction: 'prototype is data' },
+    enumerable: true
+  });
+
+  const fallbackNode = deriveGraph(world, EMPTY_LAYOUT).nodes.find(node => node.id === '__proto__');
+  assert.ok(fallbackNode);
+  assert.equal(typeof fallbackNode.position.x, 'number');
+  assert.equal(typeof fallbackNode.position.y, 'number');
+
+  const nodes = JSON.parse('{"__proto__":{"x":77,"y":88}}');
+  const persistedNode = deriveGraph(world, { version: 1, nodes }).nodes.find(node => node.id === '__proto__');
+  assert.deepEqual(persistedNode.position, { x: 77, y: 88 });
+});
+
 test('fallback positions are deterministic for the same input', () => {
   const { deriveGraph } = loadWorkflow();
   const world = baseWorld();

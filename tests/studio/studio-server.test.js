@@ -67,6 +67,8 @@ test('every implemented /api/* route including /api/events requires a session; s
       ['GET', '/api/workspace'],
       ['GET', '/api/world'],
       ['PUT', '/api/world'],
+      ['GET', '/api/layout'],
+      ['PUT', '/api/layout'],
       ['POST', '/api/validate'],
       ['GET', '/api/prompts/pm'],
       ['PUT', '/api/prompts/pm'],

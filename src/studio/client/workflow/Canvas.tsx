@@ -3,14 +3,20 @@
 // model"); this component never holds authoritative graph state of its own
 // -- it re-derives on every doc/layout change and reports interactions
 // (position drags, connections, selection) upward through callbacks for
-// the caller to apply to the world document.
+// the caller to apply to the world document. Generic React Flow changes may
+// preview an active user drag, but only drag-stop and user-origin viewport
+// events request persistence; initialization/restore notifications cannot
+// create or rewrite world.layout.json.
 // React Flow's observed node dimensions are retained only as ephemeral
 // presentation state so every edge can select the closest four-side handle
 // pair during movement; handle choices never enter world or layout storage.
+// A restore generation remounts React Flow so its initial-only viewport can
+// apply a layout reloaded after an external change. Drag/dimension maps use
+// null prototypes so every schema-valid node id remains ordinary data.
 //
 // Renders no execution status and exposes no run/stop/continue control,
 // per REQ Non-Goals and agent-world-studio-mvp.md §19.
-import { useMemo, useState } from 'react';
+import { useMemo, useRef, useState } from 'react';
 import {
   ReactFlow,
   Background,
@@ -20,6 +26,7 @@ import {
   type Node as RFNode,
   type Edge as RFEdge,
   type NodeChange,
+  type OnNodeDrag,
   type NodeMouseHandler,
   type OnConnect,
   type OnMoveEnd,
@@ -34,6 +41,7 @@ import { HumanEntryNode } from './HumanEntryNode.js';
 import { RoutingEdge } from './RoutingEdge.js';
 import { closestAnchorPair, type NodeDimensions } from './anchors.js';
 import { toPersistedRoutingSource, toRFNode } from './projection.js';
+import { positionsFromDraggedNodes, shouldPersistViewport } from './canvasPersistence.js';
 
 const nodeTypes = {
   workflowNode: WorkflowNodeCard,
@@ -49,10 +57,12 @@ export interface CanvasProps {
   layout: Layout;
   selectedNodeId: string | null;
   onSelectNode: (nodeId: string | null) => void;
+  onNodePositionsPreview?: (positions: Record<string, LayoutPosition>) => void;
   onNodePositionsChange?: (positions: Record<string, LayoutPosition>) => void;
   onConnect?: (source: string, target: string) => void;
   onDisconnect?: (source: string, target: string) => void;
   onViewportChange?: (viewport: Viewport) => void;
+  restoreGeneration?: number;
   validationErrors?: ValidationError[];
 }
 
@@ -73,13 +83,18 @@ export function Canvas({
   layout,
   selectedNodeId,
   onSelectNode,
+  onNodePositionsPreview,
   onNodePositionsChange,
   onConnect,
   onDisconnect,
   onViewportChange,
+  restoreGeneration = 0,
   validationErrors = []
 }: CanvasProps): JSX.Element {
-  const [nodeDimensions, setNodeDimensions] = useState<Record<string, NodeDimensions>>({});
+  const [nodeDimensions, setNodeDimensions] = useState<Record<string, NodeDimensions>>(
+    () => Object.create(null) as Record<string, NodeDimensions>
+  );
+  const controlViewportChangeArmed = useRef(false);
   const { nodes: graphNodes, edges: graphEdges } = useMemo(() => deriveGraph(doc, layout), [doc, layout]);
   const errorsByNode = useMemo(() => groupErrorsByNode(validationErrors), [validationErrors]);
 
@@ -129,10 +144,10 @@ export function Canvas({
   const handlePaneClick = (): void => onSelectNode(null);
 
   const handleNodesChange = (changes: NodeChange[]): void => {
-    const positions: Record<string, LayoutPosition> = {};
-    const dimensions: Record<string, NodeDimensions> = {};
+    const positions = Object.create(null) as Record<string, LayoutPosition>;
+    const dimensions = Object.create(null) as Record<string, NodeDimensions>;
     for (const change of changes) {
-      if (change.type === 'position' && change.position) {
+      if (change.type === 'position' && change.position && change.dragging === true) {
         positions[change.id] = change.position;
       }
       if (change.type === 'dimensions' && change.dimensions) {
@@ -142,7 +157,7 @@ export function Canvas({
     if (Object.keys(dimensions).length > 0) {
       setNodeDimensions(current => {
         let changed = false;
-        const next = { ...current };
+        const next = Object.assign(Object.create(null) as Record<string, NodeDimensions>, current);
         for (const [id, measured] of Object.entries(dimensions)) {
           const previous = current[id];
           if (!previous || previous.width !== measured.width || previous.height !== measured.height) {
@@ -153,7 +168,13 @@ export function Canvas({
         return changed ? next : current;
       });
     }
-    if (onNodePositionsChange && Object.keys(positions).length > 0) onNodePositionsChange(positions);
+    if (onNodePositionsPreview && Object.keys(positions).length > 0) onNodePositionsPreview(positions);
+  };
+
+  const handleNodeDragStop: OnNodeDrag = (_event, node, draggedNodes) => {
+    if (!onNodePositionsChange) return;
+    const nodes = draggedNodes.length > 0 ? draggedNodes : [node];
+    onNodePositionsChange(positionsFromDraggedNodes(nodes));
   };
 
   const handleConnect: OnConnect = connection => {
@@ -162,13 +183,20 @@ export function Canvas({
     onConnect(toPersistedRoutingSource(connection.source), connection.target);
   };
 
-  const handleMoveEnd: OnMoveEnd = (_event, viewport) => {
-    onViewportChange?.(viewport);
+  const handleMoveEnd: OnMoveEnd = (event, viewport) => {
+    const userRequested = shouldPersistViewport(event, controlViewportChangeArmed.current);
+    controlViewportChangeArmed.current = false;
+    if (userRequested) onViewportChange?.(viewport);
+  };
+
+  const armControlViewportChange = (): void => {
+    controlViewportChangeArmed.current = true;
   };
 
   return (
     <div className="studio-canvas">
       <ReactFlow
+        key={restoreGeneration}
         nodes={rfNodes}
         edges={rfEdges}
         nodeTypes={nodeTypes}
@@ -176,6 +204,7 @@ export function Canvas({
         onNodeClick={handleNodeClick}
         onPaneClick={handlePaneClick}
         onNodesChange={handleNodesChange}
+        onNodeDragStop={handleNodeDragStop}
         onConnect={handleConnect}
         onMoveEnd={handleMoveEnd}
         connectionMode={ConnectionMode.Loose}
@@ -183,7 +212,12 @@ export function Canvas({
         fitView={!layout.viewport}
       >
         <Background />
-        <Controls showInteractive={false} />
+        <Controls
+          showInteractive={false}
+          onZoomIn={armControlViewportChange}
+          onZoomOut={armControlViewportChange}
+          onFitView={armControlViewportChange}
+        />
       </ReactFlow>
     </div>
   );

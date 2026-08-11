@@ -20,7 +20,7 @@ async function withStudio(project, fn) {
   }
 }
 
-test('reading a world returns nodes, edges, agents, settings, and layout', async () => {
+test('world and layout are read through independent semantic and presentation endpoints', async () => {
   const world = {
     world: { id: 'w', name: 'w', turnLimit: 5, stopToken: '<world>pass</world>', mode: 'host_delegated' },
     workflow: {
@@ -53,8 +53,13 @@ test('reading a world returns nodes, edges, agents, settings, and layout', async
     assert.deepEqual(body.world.workflow.edges.n1, ['n2']);
     assert.equal(body.world.agents.dev.contextScope, 'agent');
     assert.equal(body.world.world.turnLimit, 5);
-    assert.equal(body.layout.nodes.n1.x, 1);
-    assert.equal(body.layout.viewport.zoom, 1);
+    assert.equal('layout' in body, false);
+
+    const layoutRes = await fetch(`${handle.origin}/api/layout`, { headers: { Cookie: cookie } });
+    const layoutBody = await layoutRes.json();
+    assert.equal(layoutBody.layout.nodes.n1.x, 1);
+    assert.equal(layoutBody.layout.viewport.zoom, 1);
+    assert.match(layoutBody.revision, /^[a-f0-9]{64}$/);
   });
 });
 
@@ -66,7 +71,25 @@ test('a project with no world file reports the world absent, not an error', asyn
     const body = await res.json();
     assert.equal(body.exists, false);
     assert.equal(body.world, null);
-    assert.deepEqual(body.layout.nodes, {});
+    assert.equal('layout' in body, false);
+    const layoutRes = await fetch(`${handle.origin}/api/layout`, { headers: { Cookie: cookie } });
+    const layoutBody = await layoutRes.json();
+    assert.deepEqual(layoutBody.layout.nodes, {});
+    assert.equal(layoutBody.revision, null);
+  });
+});
+
+test('reading world and layout does not create a missing layout file', async () => {
+  const project = makeProject();
+  const layoutPath = path.join(project, '.agent-world', 'world.layout.json');
+  assert.equal(fs.existsSync(layoutPath), false);
+
+  await withStudio(project, async ({ handle, cookie }) => {
+    const worldRes = await fetch(`${handle.origin}/api/world`, { headers: { Cookie: cookie } });
+    const layoutRes = await fetch(`${handle.origin}/api/layout`, { headers: { Cookie: cookie } });
+    assert.equal(worldRes.status, 200);
+    assert.equal(layoutRes.status, 200);
+    assert.equal(fs.existsSync(layoutPath), false, 'restore reads must not create layout storage');
   });
 });
 
@@ -151,8 +174,38 @@ test('saving a valid world is atomic, leaves no temp file, and is router-loadabl
 
     const agentWorldDir = path.join(project, '.agent-world');
     assert.equal(fs.existsSync(path.join(agentWorldDir, 'world.json.tmp')), false);
+    assert.equal(
+      fs.existsSync(path.join(agentWorldDir, 'world.layout.json')),
+      false,
+      'manual semantic save must not create a layout file'
+    );
     assert.doesNotThrow(() => router.loadConfig(path.join(agentWorldDir, 'world.json')));
   });
+});
+
+test('saving a semantic world does not rewrite an existing layout file', async () => {
+  const project = makeProject();
+  const layoutPath = path.join(project, '.agent-world', 'world.layout.json');
+  const layoutBytes = '{\n  "version": 1,\n  "nodes": { "n1": { "x": 4, "y": 5 } }\n}\n';
+  fs.writeFileSync(layoutPath, layoutBytes);
+  const fixedTime = new Date('2020-01-02T03:04:05.000Z');
+  fs.utimesSync(layoutPath, fixedTime, fixedTime);
+  const before = fs.statSync(layoutPath);
+
+  await withStudio(project, async ({ handle, cookie }) => {
+    const world = defaultWorld();
+    world.world.turnLimit = 8;
+    const res = await fetch(`${handle.origin}/api/world`, {
+      method: 'PUT',
+      headers: { Cookie: cookie, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ world })
+    });
+    assert.equal(res.status, 200);
+  });
+
+  const after = fs.statSync(layoutPath);
+  assert.equal(fs.readFileSync(layoutPath, 'utf8'), layoutBytes);
+  assert.equal(after.mtimeMs, before.mtimeMs, 'semantic save must not touch layout mtime');
 });
 
 test('a schema-invalid save leaves the project untouched with no temp file', async () => {

@@ -17,7 +17,8 @@
 // left-to-right layering; excluding them made no visible difference for
 // that example specifically because its `requires` already mirror existing
 // routing edges, but the inclusion is the safer default for graphs where
-// they don't.
+// they don't. Output uses a null-prototype dictionary so every schema-valid
+// node id, including `__proto__`, is persisted as data.
 import type { WorldDocument, Layout, LayoutPosition } from '../../shared/models.js';
 import { deriveGraph } from './derive.js';
 
@@ -45,7 +46,7 @@ export async function computeAutoLayout(doc: WorldDocument, layout: Layout): Pro
   };
 
   const result = await elk.layout(elkGraph);
-  const positions: Record<string, LayoutPosition> = {};
+  const positions = Object.create(null) as Record<string, LayoutPosition>;
   for (const child of result.children ?? []) {
     if (typeof child.x === 'number' && typeof child.y === 'number') {
       positions[child.id] = { x: child.x, y: child.y };

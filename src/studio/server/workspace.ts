@@ -6,8 +6,11 @@
 // Save order (see plan Decisions -> "Validation and saving"): serialize ->
 // write world.json.tmp -> validate the temp file's bytes (schema, then the
 // router's own loadConfig for graph references) -> fsync -> rename ->
-// record the written content hash -> caller emits world.saved. Any failure
-// unlinks the temp file and leaves the real file untouched.
+// record the written content hash -> caller emits world.saved. Layout writes
+// use their own serialized compare-and-swap path: validate -> compare the
+// caller's raw-file revision -> temp write/fsync -> rename -> record hash.
+// Layout reads tolerate malformed presentation data and reconcile entries
+// against the current world without ever weakening world validation.
 import fs from 'node:fs';
 import fsp from 'node:fs/promises';
 import path from 'node:path';
@@ -15,6 +18,7 @@ import crypto from 'node:crypto';
 import { Validator } from './validator.js';
 import type { WorldDocument, Layout, ValidationError } from '../shared/models.js';
 import { EMPTY_LAYOUT } from '../shared/models.js';
+import type { LayoutWriteMode } from '../shared/api.js';
 
 export class PathEscapeError extends Error {
   constructor(public readonly candidate: string) {
@@ -41,12 +45,118 @@ const WORLD_FILENAME = 'world.json';
 const LAYOUT_FILENAME = 'world.layout.json';
 const AGENT_WORLD_DIR = '.agent-world';
 
-export type SaveResult =
+export type WorldSaveResult =
   | { ok: true; hash: string }
   | { ok: false; errors: ValidationError[] };
 
+export type LayoutSaveResult =
+  | { ok: true; layout: Layout; revision: string }
+  | { ok: false; kind: 'validation'; errors: ValidationError[] }
+  | { ok: false; kind: 'conflict'; currentRevision: string | null };
+
+export interface LayoutReadResult {
+  layout: Layout;
+  revision: string | null;
+}
+
 function sha256(content: string | Buffer): string {
   return crypto.createHash('sha256').update(content).digest('hex');
+}
+
+function isObject(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value);
+}
+
+function isFiniteNumber(value: unknown): value is number {
+  return typeof value === 'number' && Number.isFinite(value);
+}
+
+function isLayoutPosition(value: unknown): value is { x: number; y: number } {
+  return isObject(value) && isFiniteNumber(value.x) && isFiniteNumber(value.y);
+}
+
+function isViewport(value: unknown): value is { x: number; y: number; zoom: number } {
+  return (
+    isObject(value) &&
+    isFiniteNumber(value.x) &&
+    isFiniteNumber(value.y) &&
+    isFiniteNumber(value.zoom) &&
+    value.zoom > 0
+  );
+}
+
+/** Strict boundary validation for client writes. Unknown node ids are retained until the matching world is saved. */
+function validateLayout(value: unknown): { layout?: Layout; errors: ValidationError[] } {
+  const errors: ValidationError[] = [];
+  if (!isObject(value)) {
+    return { errors: [{ pointer: 'layout', message: 'Layout must be an object.' }] };
+  }
+  if (value.version !== 1) {
+    errors.push({ pointer: 'layout.version', message: 'Layout version must be 1.' });
+  }
+  if (!isObject(value.nodes)) {
+    errors.push({ pointer: 'layout.nodes', message: 'Layout nodes must be an object.' });
+  }
+
+  const nodes = Object.create(null) as Layout['nodes'];
+  if (isObject(value.nodes)) {
+    for (const [nodeId, position] of Object.entries(value.nodes)) {
+      if (!isLayoutPosition(position)) {
+        errors.push({ pointer: `layout.nodes.${nodeId}`, message: 'Node position must contain finite x and y numbers.' });
+      } else {
+        nodes[nodeId] = { x: position.x, y: position.y };
+      }
+    }
+  }
+
+  let viewport: Layout['viewport'];
+  if (value.viewport !== undefined) {
+    if (!isViewport(value.viewport)) {
+      errors.push({ pointer: 'layout.viewport', message: 'Viewport must contain finite x, y, and positive zoom numbers.' });
+    } else {
+      viewport = { x: value.viewport.x, y: value.viewport.y, zoom: value.viewport.zoom };
+    }
+  }
+
+  return errors.length > 0 ? { errors } : { layout: { version: 1, nodes, ...(viewport ? { viewport } : {}) }, errors };
+}
+
+/** Tolerant restore: invalid roots fall back to empty; invalid/stale entries are dropped independently. */
+function restoreLayout(value: unknown, world: WorldDocument | null): Layout {
+  if (!isObject(value) || value.version !== 1 || !isObject(value.nodes)) return { version: 1, nodes: {} };
+
+  const allowedNodeIds = new Set(world ? Object.keys(world.workflow.nodes) : []);
+  if (world && Object.prototype.hasOwnProperty.call(world.workflow.edges, 'human')) allowedNodeIds.add('__human__');
+
+  const nodes = Object.create(null) as Layout['nodes'];
+  for (const [nodeId, position] of Object.entries(value.nodes)) {
+    if (allowedNodeIds.has(nodeId) && isLayoutPosition(position)) {
+      nodes[nodeId] = { x: position.x, y: position.y };
+    }
+  }
+
+  return {
+    version: 1,
+    nodes,
+    ...(isViewport(value.viewport)
+      ? { viewport: { x: value.viewport.x, y: value.viewport.y, zoom: value.viewport.zoom } }
+      : {})
+  };
+}
+
+/** Valid disk positions absent from a client snapshot remain durable across out-of-order world/layout edits. */
+function mergeAbsentDiskPositions(layout: Layout, diskValue: unknown): Layout {
+  if (!isObject(diskValue) || diskValue.version !== 1 || !isObject(diskValue.nodes)) return layout;
+  const nodes = Object.assign(Object.create(null) as Layout['nodes'], layout.nodes);
+  for (const [nodeId, position] of Object.entries(diskValue.nodes)) {
+    if (
+      !Object.prototype.hasOwnProperty.call(nodes, nodeId) &&
+      isLayoutPosition(position)
+    ) {
+      nodes[nodeId] = { x: position.x, y: position.y };
+    }
+  }
+  return { ...layout, nodes };
 }
 
 async function existsAsync(candidate: string): Promise<boolean> {
@@ -95,6 +205,7 @@ export async function resolveInsideRoots(candidate: string, roots: string[]): Pr
 
 export class Workspace {
   private readonly writeHashes = new Map<string, string>();
+  private layoutWriteQueue: Promise<void> = Promise.resolve();
   readonly worldPath: string;
   readonly layoutPath: string;
   readonly promptsDir: string;
@@ -125,13 +236,24 @@ export class Workspace {
     return fs.existsSync(this.worldPath);
   }
 
-  readWorld(): { exists: boolean; world: WorldDocument | null; layout: Layout } {
+  readWorld(): { exists: boolean; world: WorldDocument | null } {
     const exists = this.hasWorld();
     const world = exists ? (JSON.parse(fs.readFileSync(this.worldPath, 'utf8')) as WorldDocument) : null;
-    const layout = fs.existsSync(this.layoutPath)
-      ? (JSON.parse(fs.readFileSync(this.layoutPath, 'utf8')) as Layout)
-      : EMPTY_LAYOUT;
-    return { exists, world, layout };
+    return { exists, world };
+  }
+
+  readLayout(): LayoutReadResult {
+    if (!fs.existsSync(this.layoutPath)) return { layout: EMPTY_LAYOUT, revision: null };
+
+    const raw = fs.readFileSync(this.layoutPath);
+    const revision = sha256(raw);
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(raw.toString('utf8'));
+    } catch {
+      return { layout: EMPTY_LAYOUT, revision };
+    }
+    return { layout: restoreLayout(parsed, this.readWorld().world), revision };
   }
 
   /**
@@ -187,7 +309,7 @@ export class Workspace {
     }
   }
 
-  async saveWorld(doc: WorldDocument, layout?: Layout): Promise<SaveResult> {
+  async saveWorld(doc: WorldDocument): Promise<WorldSaveResult> {
     const escapeErrors = await this.findPromptPathEscapes(doc);
     if (escapeErrors.length > 0) {
       return { ok: false, errors: escapeErrors };
@@ -214,17 +336,72 @@ export class Workspace {
     const hash = sha256(content);
     this.recordWriteHash(this.worldPath, hash);
 
-    if (layout) {
-      await this.writeLayout(layout);
-    }
-
     return { ok: true, hash };
   }
 
-  async writeLayout(layout: Layout): Promise<void> {
-    const content = JSON.stringify(layout, null, 2) + '\n';
-    await fsp.writeFile(this.layoutPath, content, 'utf8');
-    this.recordWriteHash(this.layoutPath, sha256(content));
+  async saveLayout(
+    layout: unknown,
+    expectedRevision: string | null,
+    mode: LayoutWriteMode = 'merge'
+  ): Promise<LayoutSaveResult> {
+    const operation = this.layoutWriteQueue.then(() => this.performLayoutSave(layout, expectedRevision, mode));
+    this.layoutWriteQueue = operation.then(() => undefined, () => undefined);
+    return operation;
+  }
+
+  private async performLayoutSave(
+    layout: unknown,
+    expectedRevision: string | null,
+    mode: LayoutWriteMode
+  ): Promise<LayoutSaveResult> {
+    const validation = validateLayout(layout);
+    if (!validation.layout) return { ok: false, kind: 'validation', errors: validation.errors };
+
+    let persistedLayout = validation.layout;
+    if (mode === 'merge' && fs.existsSync(this.layoutPath)) {
+      try {
+        const diskValue = JSON.parse((await fsp.readFile(this.layoutPath)).toString('utf8')) as unknown;
+        persistedLayout = mergeAbsentDiskPositions(persistedLayout, diskValue);
+      } catch {
+        // A malformed external file is represented by its raw revision and
+        // conflict behavior; there are no trustworthy positions to retain.
+      }
+    }
+
+    const content = JSON.stringify(persistedLayout, null, 2) + '\n';
+    const revision = sha256(content);
+    const tmpPath = `${this.layoutPath}.${process.pid}-${crypto.randomBytes(8).toString('hex')}.tmp`;
+    try {
+      const handle = await fsp.open(tmpPath, 'w');
+      try {
+        await handle.writeFile(content, 'utf8');
+        await handle.sync();
+      } finally {
+        await handle.close();
+      }
+
+      // Compare only after the potentially slow temp write/fsync, keeping
+      // the unavoidable external-write race window next to the atomic rename.
+      const currentRevision = fs.existsSync(this.layoutPath)
+        ? sha256(await fsp.readFile(this.layoutPath))
+        : null;
+      if (currentRevision !== expectedRevision) {
+        await fsp.unlink(tmpPath).catch(() => {});
+        // If the response to our previous identical write was lost, retry is
+        // an acknowledgement, not a false external conflict.
+        if (currentRevision === revision) {
+          this.recordWriteHash(this.layoutPath, revision);
+          return { ok: true, layout: persistedLayout, revision };
+        }
+        return { ok: false, kind: 'conflict', currentRevision };
+      }
+      await fsp.rename(tmpPath, this.layoutPath);
+    } catch (err) {
+      await fsp.unlink(tmpPath).catch(() => {});
+      throw err;
+    }
+    this.recordWriteHash(this.layoutPath, revision);
+    return { ok: true, layout: persistedLayout, revision };
   }
 
   private resolvePromptCandidate(world: WorldDocument, agentId: string): string {

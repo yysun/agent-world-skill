@@ -1,5 +1,7 @@
 // The Studio HTTP surface: the token handshake, static client assets, the
-// world/validate/prompt API, and the SSE event stream.
+// independently persisted world/layout APIs, validation/prompt API, and the
+// SSE event stream. Layout writes use raw-file revision tokens so autosave
+// cannot silently overwrite an external edit.
 //
 // Ownership boundary (REQ, plan Decisions -> "Ownership boundary is enforced,
 // not assumed"): this file must never register a route that starts, stops,
@@ -12,6 +14,7 @@ import type { Workspace } from './workspace.js';
 import { PathEscapeError, UnknownAgentError, PromptNotFoundError } from './workspace.js';
 import type { EventBus } from './sse.js';
 import type { WorldDocument, Layout } from '../shared/models.js';
+import type { LayoutWriteMode } from '../shared/api.js';
 
 const SESSION_COOKIE = 'studio_session';
 
@@ -86,23 +89,57 @@ export function createServer(options: CreateServerOptions): StudioServerHandle {
   });
 
   api.get('/world', (_req: Request, res: Response) => {
-    const { exists, world, layout } = workspace.readWorld();
-    res.json({ exists, world, layout });
+    const { exists, world } = workspace.readWorld();
+    res.json({ exists, world });
   });
 
   api.put('/world', async (req: Request, res: Response) => {
-    const body = req.body as { world?: WorldDocument; layout?: Layout } | undefined;
+    const body = req.body as { world?: WorldDocument } | undefined;
     if (!body || typeof body.world !== 'object' || body.world === null) {
       res.status(400).json({ errors: [{ pointer: 'world', message: 'Request body must include a world object.' }] });
       return;
     }
-    const result = await workspace.saveWorld(body.world, body.layout);
+    const result = await workspace.saveWorld(body.world);
     if (!result.ok) {
       res.status(400).json({ errors: result.errors });
       return;
     }
     bus.publish({ type: 'world.saved', hash: result.hash });
     res.json({ hash: result.hash });
+  });
+
+  api.get('/layout', (_req: Request, res: Response) => {
+    res.json(workspace.readLayout());
+  });
+
+  api.put('/layout', async (req: Request, res: Response) => {
+    const body = req.body as { layout?: Layout; expectedRevision?: string | null; mode?: LayoutWriteMode } | undefined;
+    if (!body || typeof body.layout !== 'object' || body.layout === null) {
+      res.status(400).json({ errors: [{ pointer: 'layout', message: 'Request body must include a layout object.' }] });
+      return;
+    }
+    if (body.expectedRevision !== null && typeof body.expectedRevision !== 'string') {
+      res.status(400).json({ errors: [{ pointer: 'expectedRevision', message: 'Expected revision must be a string or null.' }] });
+      return;
+    }
+    if (body.mode !== undefined && body.mode !== 'merge' && body.mode !== 'replace') {
+      res.status(400).json({ errors: [{ pointer: 'mode', message: 'Layout write mode must be merge or replace.' }] });
+      return;
+    }
+
+    const result = await workspace.saveLayout(body.layout, body.expectedRevision, body.mode ?? 'merge');
+    if (!result.ok) {
+      if (result.kind === 'conflict') {
+        res.status(409).json({
+          currentRevision: result.currentRevision,
+          errors: [{ pointer: 'layout', message: 'Layout changed outside Studio.' }]
+        });
+      } else {
+        res.status(400).json({ errors: result.errors });
+      }
+      return;
+    }
+    res.json({ layout: result.layout, revision: result.revision });
   });
 
   api.post('/validate', async (req: Request, res: Response) => {
@@ -151,6 +188,15 @@ export function createServer(options: CreateServerOptions): StudioServerHandle {
 
   // Express 5 forwards a rejected async handler's error here automatically.
   app.use((err: unknown, _req: Request, res: Response, _next: NextFunction) => {
+    if (
+      typeof err === 'object' &&
+      err !== null &&
+      'type' in err &&
+      (err as { type?: unknown }).type === 'entity.parse.failed'
+    ) {
+      res.status(400).json({ errors: [{ pointer: '', message: 'Invalid JSON request body.' }] });
+      return;
+    }
     res.status(500).json({ errors: [{ pointer: '', message: err instanceof Error ? err.message : 'Internal error' }] });
   });
 

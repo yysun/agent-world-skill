@@ -277,12 +277,13 @@ It prints a `http://127.0.0.1:<port>/?token=<token>` URL. Opening it completes a
 Implemented endpoints, all requiring the session cookie except the `/` handshake and the static client assets:
 
 - `GET /api/workspace`: the resolved project root and whether a world is loaded.
-- `GET /api/world` / `PUT /api/world`: read and atomically save `.agent-world/world.json` plus its layout, validated against both the canonical schema and the router's own graph rules before anything is written.
+- `GET /api/world` / `PUT /api/world`: read and atomically save semantic `.agent-world/world.json`, validated against both the canonical schema and the router's own graph rules before anything is written.
+- `GET /api/layout` / `PUT /api/layout`: restore `.agent-world/world.layout.json` and atomically autosave it after canvas edits. Writes carry the raw file revision returned by the last read/write, so an external edit wins a conflict instead of being silently overwritten.
 - `POST /api/validate`: validate a candidate world without saving it.
 - `GET /api/prompts/:agentId` / `PUT /api/prompts/:agentId`: read and write an agent's prompt file, addressed by agent id with the path resolved from the world, not supplied by the client.
 - `GET /api/events`: a Server-Sent Events stream of file changes, saves, and validation results, shared by every connected client from one file watcher.
 
-Visual layout (node positions, viewport) lives only in `.agent-world/world.layout.json`; `.agent-world/world.json` remains the semantic source of truth and never carries layout data.
+Visual layout (node positions, viewport) lives only in `.agent-world/world.layout.json`; `.agent-world/world.json` remains the semantic source of truth and never carries layout data. Studio writes the layout file only after a node drag, viewport pan/zoom (including the canvas controls), or explicit Auto layout. Opening, restoring, editing semantic fields, and manually saving the world never create or rewrite it. Missing or malformed layout falls back safely, and stale node positions are ignored until the matching node exists in the world.
 
 ### The Design surface
 
@@ -295,9 +296,9 @@ From the canvas and its side panels, a user can:
 - Add, rename, and delete agents, and edit an agent's display name, role, prompt path, and context scope.
 - Edit world-level settings: identifier, name, turn limit, stop token, and mode.
 - Open and edit an agent's prompt Markdown file, and view the current in-memory world as raw JSON.
-- Run automatic layout on demand (never automatically); manually dragged positions and the last viewport are restored the next time Studio opens the same project.
-- Save through the server, which is the only path that can reject an edit; a rejected save is reported as a failure and never discards the edit. Validation errors are shown against the specific node, edge, agent, or field they name, not only as a generic failure.
-- Handle a file changed outside Studio: silently, if there are no unsaved edits; otherwise Studio offers Reload, Compare (a side-by-side diff), or Keep Studio Version.
+- Run automatic layout on demand (never automatically). Manual positions, automatic-layout results, and the last viewport autosave independently and restore the next time Studio opens the same project; moving the canvas does not make the semantic world dirty.
+- Save workflow edits manually through the server, which is the only path that can reject a semantic edit. A rejected save is reported as a failure and never discards the edit. Validation errors are shown against the specific node, edge, agent, or field they name, not only as a generic failure. Layout save failures have their own visible Retry action and retain the latest in-memory layout.
+- Handle a file changed outside Studio per resource: a clean world or layout reloads independently without discarding dirty state in the other; only a change that collides with unsaved state of the same resource offers Reload, Compare (including node positions and viewport for a layout conflict), or Keep Studio Version.
 - Reconnect the event stream on its own after a transient drop, while the server process keeps running. A restarted server process is a different case: it mints a fresh session token per launch, so the browser cannot recover the old session on its own; the client shows a clear "session expired" message telling you to reopen the newly printed URL rather than hanging silently.
 
 Deleting a node also removes it from every routing edge and every other node's `requires`; deleting an agent still assigned to a node is refused rather than silently orphaning that node. Both node and agent deletion are confirmed first, naming what else will be removed.

@@ -1,7 +1,7 @@
 /*
   SSE event stream: connection, heartbeat, external-change delivery,
-  self-write suppression, world.saved payload, and single-watcher sharing
-  across concurrent clients.
+  world/layout self-write classification, world.saved payload, and
+  single-watcher sharing across concurrent clients.
 */
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
@@ -81,6 +81,35 @@ test("the server's own save is suppressed to source studio and carries a world.s
     const text = await streamPromise;
     assert.match(text, new RegExp(`"type":"world\\.saved","hash":"${putBody.hash}"`));
     assert.match(text, /"type":"file\.changed","path":"[^"]*world\.json","source":"studio"/);
+  } finally {
+    await stopStudio(handle);
+  }
+});
+
+test('layout autosave is classified as a Studio self-write without publishing world.saved', async () => {
+  const project = makeProject();
+  const handle = await startStudio(project);
+  try {
+    const cookie = await handshake(handle);
+    const streamPromise = (async () => {
+      const res = await fetch(`${handle.origin}/api/events`, { headers: { Cookie: cookie } });
+      return collectSse(res, { untilMatches: /world\.layout\.json/ });
+    })();
+
+    await new Promise(resolve => setTimeout(resolve, 200));
+    const putRes = await fetch(`${handle.origin}/api/layout`, {
+      method: 'PUT',
+      headers: { Cookie: cookie, 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        layout: { version: 1, nodes: { n1: { x: 12, y: 34 } } },
+        expectedRevision: null
+      })
+    });
+    assert.equal(putRes.status, 200);
+
+    const text = await streamPromise;
+    assert.match(text, /"type":"file\.changed","path":"[^"]*world\.layout\.json","source":"studio"/);
+    assert.doesNotMatch(text, /"type":"world\.saved"/);
   } finally {
     await stopStudio(handle);
   }

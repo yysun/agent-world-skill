@@ -767,28 +767,33 @@ The graph must highlight:
 
 ## 18. Editing Behavior
 
-### 18.1 Save workflow
+### 18.1 Save workflow and layout
 
-When Studio saves:
+When Studio saves semantic workflow edits:
 
 1. Validate the in-memory graph.
 2. Convert it to the canonical `world.json` structure.
 3. Validate against `world.schema.json`.
 4. Write the file atomically.
-5. Save layout separately.
-6. Publish a `world.saved` event.
-7. Record the resulting content hash.
+5. Publish a `world.saved` event.
+6. Record the resulting content hash.
+
+Layout is a separate automatic path. Only a canvas edit—a completed node drag, user viewport pan/zoom (including Zoom In, Zoom Out, and Fit View controls), or explicit Auto layout—schedules persistence. Studio debounces and serializes an atomic write to `world.layout.json`. Opening, restoring, semantic editing, manual world Save, and programmatic canvas initialization do not write it. Each request carries the raw-file revision from the last layout read or write; a mismatch pauses autosave and enters the external-change flow instead of overwriting the file. A failed layout write leaves the latest layout in memory and exposes Retry. Studio restores valid layout automatically on open; malformed roots fall back to an empty layout and invalid or stale entries inside a valid layout are ignored independently.
 
 ### 18.2 External changes
 
-When a workflow or prompt file changes outside Studio:
+When a workflow, layout, or prompt file changes outside Studio:
 
-- Do not silently overwrite unsaved Studio edits.
+- Reload a clean world or layout independently, even if the other resource has unsaved edits.
+- Do not silently overwrite unsaved Studio edits in the changed resource.
 - Offer:
   - Reload
   - Compare
   - Keep Studio Version
 - Ignore watcher events matching Studio's latest saved hash.
+- Pause queued layout autosave only for a layout conflict, until the user chooses Reload or Keep Studio Version.
+- Never create a layout write from a world-only conflict decision.
+- Compare layout conflicts using node positions and viewport, not only workflow JSON.
 
 ### 18.3 Atomic writes
 
@@ -905,7 +910,7 @@ Compiled output must be committed or included in the release package.
 - Serve static Studio UI
 - Load `world.json`
 - Render nodes and routing edges
-- Load and save layout
+- Load and autosave layout independently of workflow saves
 - Add schema validation
 
 ### Milestone 2 — Workflow editing
@@ -965,7 +970,7 @@ Compiled output must be committed or included in the release package.
 - The user can edit prompt files.
 - The user can save a valid `world.json`.
 - Invalid configurations display actionable errors.
-- Visual layout survives reopening Studio.
+- Visual layout survives reopening Studio without an explicit workflow save.
 - External file changes are detected without losing unsaved work.
 
 ### 23.2 Observation

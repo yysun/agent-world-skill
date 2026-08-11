@@ -31209,6 +31209,75 @@ var AGENT_WORLD_DIR = ".agent-world";
 function sha256(content) {
   return import_node_crypto.default.createHash("sha256").update(content).digest("hex");
 }
+function isObject(value) {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+function isFiniteNumber(value) {
+  return typeof value === "number" && Number.isFinite(value);
+}
+function isLayoutPosition(value) {
+  return isObject(value) && isFiniteNumber(value.x) && isFiniteNumber(value.y);
+}
+function isViewport(value) {
+  return isObject(value) && isFiniteNumber(value.x) && isFiniteNumber(value.y) && isFiniteNumber(value.zoom) && value.zoom > 0;
+}
+function validateLayout(value) {
+  const errors = [];
+  if (!isObject(value)) {
+    return { errors: [{ pointer: "layout", message: "Layout must be an object." }] };
+  }
+  if (value.version !== 1) {
+    errors.push({ pointer: "layout.version", message: "Layout version must be 1." });
+  }
+  if (!isObject(value.nodes)) {
+    errors.push({ pointer: "layout.nodes", message: "Layout nodes must be an object." });
+  }
+  const nodes = /* @__PURE__ */ Object.create(null);
+  if (isObject(value.nodes)) {
+    for (const [nodeId, position] of Object.entries(value.nodes)) {
+      if (!isLayoutPosition(position)) {
+        errors.push({ pointer: `layout.nodes.${nodeId}`, message: "Node position must contain finite x and y numbers." });
+      } else {
+        nodes[nodeId] = { x: position.x, y: position.y };
+      }
+    }
+  }
+  let viewport;
+  if (value.viewport !== void 0) {
+    if (!isViewport(value.viewport)) {
+      errors.push({ pointer: "layout.viewport", message: "Viewport must contain finite x, y, and positive zoom numbers." });
+    } else {
+      viewport = { x: value.viewport.x, y: value.viewport.y, zoom: value.viewport.zoom };
+    }
+  }
+  return errors.length > 0 ? { errors } : { layout: { version: 1, nodes, ...viewport ? { viewport } : {} }, errors };
+}
+function restoreLayout(value, world) {
+  if (!isObject(value) || value.version !== 1 || !isObject(value.nodes)) return { version: 1, nodes: {} };
+  const allowedNodeIds = new Set(world ? Object.keys(world.workflow.nodes) : []);
+  if (world && Object.prototype.hasOwnProperty.call(world.workflow.edges, "human")) allowedNodeIds.add("__human__");
+  const nodes = /* @__PURE__ */ Object.create(null);
+  for (const [nodeId, position] of Object.entries(value.nodes)) {
+    if (allowedNodeIds.has(nodeId) && isLayoutPosition(position)) {
+      nodes[nodeId] = { x: position.x, y: position.y };
+    }
+  }
+  return {
+    version: 1,
+    nodes,
+    ...isViewport(value.viewport) ? { viewport: { x: value.viewport.x, y: value.viewport.y, zoom: value.viewport.zoom } } : {}
+  };
+}
+function mergeAbsentDiskPositions(layout, diskValue) {
+  if (!isObject(diskValue) || diskValue.version !== 1 || !isObject(diskValue.nodes)) return layout;
+  const nodes = Object.assign(/* @__PURE__ */ Object.create(null), layout.nodes);
+  for (const [nodeId, position] of Object.entries(diskValue.nodes)) {
+    if (!Object.prototype.hasOwnProperty.call(nodes, nodeId) && isLayoutPosition(position)) {
+      nodes[nodeId] = { x: position.x, y: position.y };
+    }
+  }
+  return { ...layout, nodes };
+}
 async function existsAsync(candidate) {
   try {
     await import_promises.default.access(candidate);
@@ -31256,6 +31325,7 @@ var Workspace = class _Workspace {
   agentWorldDir;
   validator;
   writeHashes = /* @__PURE__ */ new Map();
+  layoutWriteQueue = Promise.resolve();
   worldPath;
   layoutPath;
   promptsDir;
@@ -31274,8 +31344,19 @@ var Workspace = class _Workspace {
   readWorld() {
     const exists = this.hasWorld();
     const world = exists ? JSON.parse(import_node_fs2.default.readFileSync(this.worldPath, "utf8")) : null;
-    const layout = import_node_fs2.default.existsSync(this.layoutPath) ? JSON.parse(import_node_fs2.default.readFileSync(this.layoutPath, "utf8")) : EMPTY_LAYOUT;
-    return { exists, world, layout };
+    return { exists, world };
+  }
+  readLayout() {
+    if (!import_node_fs2.default.existsSync(this.layoutPath)) return { layout: EMPTY_LAYOUT, revision: null };
+    const raw = import_node_fs2.default.readFileSync(this.layoutPath);
+    const revision = sha256(raw);
+    let parsed;
+    try {
+      parsed = JSON.parse(raw.toString("utf8"));
+    } catch {
+      return { layout: EMPTY_LAYOUT, revision };
+    }
+    return { layout: restoreLayout(parsed, this.readWorld().world), revision };
   }
   /**
    * Checks every agent's promptPath for a root escape before the candidate
@@ -31312,7 +31393,10 @@ var Workspace = class _Workspace {
       return { valid: false, errors: escapeErrors };
     }
     const content = JSON.stringify(doc, null, 2) + "\n";
-    const tmpPath = import_node_path2.default.join(this.agentWorldDir, `${WORLD_FILENAME}.validate-${process.pid}-${Date.now()}.tmp`);
+    const tmpPath = import_node_path2.default.join(
+      this.agentWorldDir,
+      `${WORLD_FILENAME}.validate-${process.pid}-${import_node_crypto.default.randomBytes(8).toString("hex")}.tmp`
+    );
     await import_promises.default.writeFile(tmpPath, content, "utf8");
     try {
       return this.validator.validatePath(tmpPath);
@@ -31321,7 +31405,7 @@ var Workspace = class _Workspace {
       });
     }
   }
-  async saveWorld(doc, layout) {
+  async saveWorld(doc) {
     const escapeErrors = await this.findPromptPathEscapes(doc);
     if (escapeErrors.length > 0) {
       return { ok: false, errors: escapeErrors };
@@ -31344,15 +31428,53 @@ var Workspace = class _Workspace {
     await import_promises.default.rename(tmpPath, this.worldPath);
     const hash = sha256(content);
     this.recordWriteHash(this.worldPath, hash);
-    if (layout) {
-      await this.writeLayout(layout);
-    }
     return { ok: true, hash };
   }
-  async writeLayout(layout) {
-    const content = JSON.stringify(layout, null, 2) + "\n";
-    await import_promises.default.writeFile(this.layoutPath, content, "utf8");
-    this.recordWriteHash(this.layoutPath, sha256(content));
+  async saveLayout(layout, expectedRevision, mode = "merge") {
+    const operation = this.layoutWriteQueue.then(() => this.performLayoutSave(layout, expectedRevision, mode));
+    this.layoutWriteQueue = operation.then(() => void 0, () => void 0);
+    return operation;
+  }
+  async performLayoutSave(layout, expectedRevision, mode) {
+    const validation = validateLayout(layout);
+    if (!validation.layout) return { ok: false, kind: "validation", errors: validation.errors };
+    let persistedLayout = validation.layout;
+    if (mode === "merge" && import_node_fs2.default.existsSync(this.layoutPath)) {
+      try {
+        const diskValue = JSON.parse((await import_promises.default.readFile(this.layoutPath)).toString("utf8"));
+        persistedLayout = mergeAbsentDiskPositions(persistedLayout, diskValue);
+      } catch {
+      }
+    }
+    const content = JSON.stringify(persistedLayout, null, 2) + "\n";
+    const revision = sha256(content);
+    const tmpPath = `${this.layoutPath}.${process.pid}-${import_node_crypto.default.randomBytes(8).toString("hex")}.tmp`;
+    try {
+      const handle = await import_promises.default.open(tmpPath, "w");
+      try {
+        await handle.writeFile(content, "utf8");
+        await handle.sync();
+      } finally {
+        await handle.close();
+      }
+      const currentRevision = import_node_fs2.default.existsSync(this.layoutPath) ? sha256(await import_promises.default.readFile(this.layoutPath)) : null;
+      if (currentRevision !== expectedRevision) {
+        await import_promises.default.unlink(tmpPath).catch(() => {
+        });
+        if (currentRevision === revision) {
+          this.recordWriteHash(this.layoutPath, revision);
+          return { ok: true, layout: persistedLayout, revision };
+        }
+        return { ok: false, kind: "conflict", currentRevision };
+      }
+      await import_promises.default.rename(tmpPath, this.layoutPath);
+    } catch (err) {
+      await import_promises.default.unlink(tmpPath).catch(() => {
+      });
+      throw err;
+    }
+    this.recordWriteHash(this.layoutPath, revision);
+    return { ok: true, layout: persistedLayout, revision };
   }
   resolvePromptCandidate(world, agentId) {
     const agent = world.agents[agentId];
@@ -33265,8 +33387,8 @@ function createServer(options) {
     res.json({ projectRoot: workspace.projectRoot, hasWorld: workspace.hasWorld() });
   });
   api.get("/world", (_req, res) => {
-    const { exists, world, layout } = workspace.readWorld();
-    res.json({ exists, world, layout });
+    const { exists, world } = workspace.readWorld();
+    res.json({ exists, world });
   });
   api.put("/world", async (req, res) => {
     const body = req.body;
@@ -33274,13 +33396,44 @@ function createServer(options) {
       res.status(400).json({ errors: [{ pointer: "world", message: "Request body must include a world object." }] });
       return;
     }
-    const result = await workspace.saveWorld(body.world, body.layout);
+    const result = await workspace.saveWorld(body.world);
     if (!result.ok) {
       res.status(400).json({ errors: result.errors });
       return;
     }
     bus.publish({ type: "world.saved", hash: result.hash });
     res.json({ hash: result.hash });
+  });
+  api.get("/layout", (_req, res) => {
+    res.json(workspace.readLayout());
+  });
+  api.put("/layout", async (req, res) => {
+    const body = req.body;
+    if (!body || typeof body.layout !== "object" || body.layout === null) {
+      res.status(400).json({ errors: [{ pointer: "layout", message: "Request body must include a layout object." }] });
+      return;
+    }
+    if (body.expectedRevision !== null && typeof body.expectedRevision !== "string") {
+      res.status(400).json({ errors: [{ pointer: "expectedRevision", message: "Expected revision must be a string or null." }] });
+      return;
+    }
+    if (body.mode !== void 0 && body.mode !== "merge" && body.mode !== "replace") {
+      res.status(400).json({ errors: [{ pointer: "mode", message: "Layout write mode must be merge or replace." }] });
+      return;
+    }
+    const result = await workspace.saveLayout(body.layout, body.expectedRevision, body.mode ?? "merge");
+    if (!result.ok) {
+      if (result.kind === "conflict") {
+        res.status(409).json({
+          currentRevision: result.currentRevision,
+          errors: [{ pointer: "layout", message: "Layout changed outside Studio." }]
+        });
+      } else {
+        res.status(400).json({ errors: result.errors });
+      }
+      return;
+    }
+    res.json({ layout: result.layout, revision: result.revision });
   });
   api.post("/validate", async (req, res) => {
     const body = req.body;
@@ -33321,6 +33474,10 @@ function createServer(options) {
   app.use("/api", api);
   app.use(import_express.default.static(clientDistDir));
   app.use((err, _req, res, _next) => {
+    if (typeof err === "object" && err !== null && "type" in err && err.type === "entity.parse.failed") {
+      res.status(400).json({ errors: [{ pointer: "", message: "Invalid JSON request body." }] });
+      return;
+    }
     res.status(500).json({ errors: [{ pointer: "", message: err instanceof Error ? err.message : "Internal error" }] });
   });
   return { app, sessionToken };
@@ -33342,8 +33499,17 @@ function handlePromptError(err, res) {
 }
 
 // src/studio/server/cli.ts
-var SKILL_DIR = import_node_path5.default.resolve(__dirname, "..");
+var SKILL_DIR = process.env.STUDIO_SKILL_DIR ? import_node_path5.default.resolve(process.env.STUDIO_SKILL_DIR) : import_node_path5.default.resolve(__dirname, "..");
 var CLIENT_DIST_DIR = import_node_path5.default.join(SKILL_DIR, "studio", "dist");
+function devSessionToken() {
+  const token = process.env.STUDIO_SESSION_TOKEN;
+  if (!token) return void 0;
+  if (!/^[A-Za-z0-9_-]{48,}$/.test(token)) {
+    console.error("Ignoring STUDIO_SESSION_TOKEN: expected at least 48 url-safe characters.");
+    return void 0;
+  }
+  return token;
+}
 function parseArgs(argv) {
   let project = process.cwd();
   let port;
@@ -33356,6 +33522,10 @@ function parseArgs(argv) {
       port = Number(argv[++i]);
     } else if (arg === "--no-open") {
       open2 = false;
+    } else if (arg === "--") {
+      continue;
+    } else if (!arg.startsWith("-")) {
+      project = arg;
     }
   }
   return { project, port, open: open2 };
@@ -33380,7 +33550,12 @@ async function main(argv = process.argv.slice(2)) {
   const heartbeatOverride = Number(process.env.STUDIO_HEARTBEAT_INTERVAL_MS);
   const bus = new EventBus(Number.isFinite(heartbeatOverride) && heartbeatOverride > 0 ? heartbeatOverride : void 0);
   const watcher = new Watcher(workspace, bus);
-  const { app, sessionToken } = createServer({ workspace, bus, clientDistDir: CLIENT_DIST_DIR });
+  const { app, sessionToken } = createServer({
+    workspace,
+    bus,
+    clientDistDir: CLIENT_DIST_DIR,
+    sessionToken: devSessionToken()
+  });
   const server = import_node_http.default.createServer(app);
   await new Promise((resolve3, reject) => {
     server.once("error", reject);

@@ -1,15 +1,17 @@
-// Read-only two-column diff between the in-memory (Studio) world document
-// and the on-disk (external) version, shown when the user chooses Compare
-// from ConflictPrompt (plan Decisions -> "Conflict handling"). Fetches the
-// on-disk copy directly rather than through state/useWorldState.ts, since
-// looking does not itself resolve the conflict -- only Reload and Keep
-// Studio Version do, and neither mutates from within this view; it only
-// reports which the user picked.
+// Read-only two-column diff between the in-memory Studio state and the
+// on-disk external version. Semantic conflicts compare WorldDocument
+// sections; layout conflicts compare node positions and viewport through
+// the dedicated layout endpoint. Looking never resolves a conflict -- only
+// Reload and Keep Studio Version do.
 import { useEffect, useState } from 'react';
-import type { WorldDocument } from '../../shared/models.js';
+import type { Layout, WorldDocument } from '../../shared/models.js';
+import type { LayoutGetResponse } from '../../shared/api.js';
 
 export interface CompareViewProps {
+  kind: 'world' | 'layout' | 'both';
+  conflictVersion: number;
   studioDoc: WorldDocument;
+  studioLayout: Layout;
   onReload: () => void;
   onKeepStudioVersion: () => void;
   onClose: () => void;
@@ -21,27 +23,83 @@ function sectionChanged(a: WorldDocument, b: WorldDocument, key: keyof WorldDocu
   return JSON.stringify(a[key]) !== JSON.stringify(b[key]);
 }
 
-export function CompareView({ studioDoc, onReload, onKeepStudioVersion, onClose }: CompareViewProps): JSX.Element {
+export function CompareView({
+  kind,
+  conflictVersion,
+  studioDoc,
+  studioLayout,
+  onReload,
+  onKeepStudioVersion,
+  onClose
+}: CompareViewProps): JSX.Element {
   const [externalDoc, setExternalDoc] = useState<WorldDocument | null>(null);
+  const [externalLayout, setExternalLayout] = useState<Layout | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
+  const [loading, setLoading] = useState(true);
 
   useEffect(() => {
-    fetch('/api/world')
-      .then(res => {
-        if (!res.ok) throw new Error(`World request failed: ${res.status}`);
-        return res.json() as Promise<{ world: WorldDocument | null }>;
+    const controller = new AbortController();
+    let cancelled = false;
+    setExternalDoc(null);
+    setExternalLayout(null);
+    setLoadError(null);
+    setLoading(true);
+    const worldRequest =
+      kind === 'layout'
+        ? Promise.resolve(null)
+        : fetch('/api/world', { signal: controller.signal }).then(async res => {
+            if (!res.ok) throw new Error(`World request failed: ${res.status}`);
+            return (await res.json()) as { world: WorldDocument | null };
+          });
+    const layoutRequest =
+      kind === 'world'
+        ? Promise.resolve(null)
+        : fetch('/api/layout', { signal: controller.signal }).then(async res => {
+            if (!res.ok) throw new Error(`Layout request failed: ${res.status}`);
+            return (await res.json()) as LayoutGetResponse;
+          });
+    Promise.all([worldRequest, layoutRequest])
+      .then(([worldBody, layoutBody]) => {
+        if (cancelled) return;
+        if (worldBody) setExternalDoc(worldBody.world);
+        if (layoutBody) setExternalLayout(layoutBody.layout);
       })
-      .then(body => setExternalDoc(body.world))
-      .catch((err: Error) => setLoadError(err.message));
-  }, []);
+      .catch((err: Error) => {
+        if (!cancelled) setLoadError(err.message);
+      })
+      .finally(() => {
+        if (!cancelled) setLoading(false);
+      });
+    return () => {
+      cancelled = true;
+      controller.abort();
+    };
+  }, [kind, conflictVersion]);
 
   return (
     <div className="studio-dialog-backdrop" role="dialog" aria-modal="true" aria-label="Compare Studio and external versions">
       <div className="studio-dialog studio-dialog--wide">
         <h2>Compare</h2>
         {loadError && <p role="alert">{loadError}</p>}
-        {!loadError && !externalDoc && <p>Loading the on-disk version...</p>}
-        {externalDoc && (
+        {!loadError && loading && <p>Loading the on-disk version...</p>}
+        {!loadError && !loading && kind !== 'layout' && !externalDoc && <p>The external world file is absent.</p>}
+        {kind !== 'world' && externalLayout && (
+          <div className="studio-diff-columns">
+            <div>
+              <h3>Studio (in-memory)</h3>
+              <pre className={JSON.stringify(studioLayout) !== JSON.stringify(externalLayout) ? 'studio-diff-changed' : ''}>
+                {JSON.stringify(studioLayout, null, 2)}
+              </pre>
+            </div>
+            <div>
+              <h3>External (on disk)</h3>
+              <pre className={JSON.stringify(studioLayout) !== JSON.stringify(externalLayout) ? 'studio-diff-changed' : ''}>
+                {JSON.stringify(externalLayout, null, 2)}
+              </pre>
+            </div>
+          </div>
+        )}
+        {kind !== 'layout' && externalDoc && (
           <div className="studio-diff-columns">
             <div>
               <h3>Studio (in-memory)</h3>

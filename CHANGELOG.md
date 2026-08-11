@@ -23,6 +23,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- Agent World Studio now restores layout automatically and autosaves only after canvas edits, independently of manual workflow saves, with atomic revision-checked writes and resource-scoped conflict recovery.
 - Restructured the skills directory layout.
 - Updated file structure for agent handoffs and improved workflow validation.
 - Embedded the `init-agent-world` process directly into `SKILL.md`.
@@ -33,5 +34,3 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Removed
 
 - Standalone messaging patterns file, folded into the main setup documentation.
-
-

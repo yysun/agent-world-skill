@@ -6,7 +6,9 @@
 // Routing edges and `requires` prerequisites are tagged with a
 // discriminating `kind` and never merged into one collection, per
 // agent-world-studio-mvp.md §17 (solid routing arrow vs dashed prerequisite
-// arrow). The `human` routing source is represented as a distinct
+// arrow). Own-property layout reads keep schema-valid identifiers such as
+// `__proto__` from being mistaken for inherited object properties. The
+// `human` routing source is represented as a distinct
 // `humanEntry` node rather than a workflow node (plan Decisions -> "Graph
 // model"). Nodes absent from the layout receive a deterministic fallback
 // position so a never-laid-out world still renders legibly.
@@ -61,6 +63,10 @@ function fallbackPosition(index: number): LayoutPosition {
   };
 }
 
+function persistedPosition(layout: Layout, nodeId: string): LayoutPosition | undefined {
+  return Object.prototype.hasOwnProperty.call(layout.nodes, nodeId) ? layout.nodes[nodeId] : undefined;
+}
+
 export function deriveGraph(doc: WorldDocument, layout: Layout): DerivedGraph {
   const nodeIds = Object.keys(doc.workflow.nodes);
 
@@ -70,7 +76,7 @@ export function deriveGraph(doc: WorldDocument, layout: Layout): DerivedGraph {
     return {
       id: nodeId,
       kind: 'workflowNode',
-      position: layout.nodes[nodeId] ?? fallbackPosition(index),
+      position: persistedPosition(layout, nodeId) ?? fallbackPosition(index),
       isEntry: nodeId === doc.workflow.entry,
       agentId: node.agent,
       agentRole: agent?.role,
@@ -82,7 +88,7 @@ export function deriveGraph(doc: WorldDocument, layout: Layout): DerivedGraph {
     nodes.push({
       id: HUMAN_NODE_ID,
       kind: 'humanEntry',
-      position: layout.nodes[HUMAN_NODE_ID] ?? { x: -FALLBACK_COLUMN_WIDTH, y: 0 },
+      position: persistedPosition(layout, HUMAN_NODE_ID) ?? { x: -FALLBACK_COLUMN_WIDTH, y: 0 },
       isEntry: false
     });
   }

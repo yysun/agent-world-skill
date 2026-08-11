@@ -8,8 +8,10 @@
 // (state/ConflictPrompt.tsx, state/CompareView.tsx) -- all backed by the
 // in-memory WorldDocument (state/useWorldState.ts), the single source of
 // truth every mutation flows through so the canvas re-derives rather than
-// holding independent state.
-import { useEffect, useRef, useState } from 'react';
+// holding independent state. Layout restores and autosaves separately after
+// canvas edits; external world/layout changes reload clean resources in
+// isolation and conflict only with dirty state of the same resource.
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { ReactFlowProvider } from '@xyflow/react';
 import type { WorldSection, AgentConfig } from '../shared/models.js';
 import type { StudioEvent } from '../shared/events.js';
@@ -44,6 +46,12 @@ import { useWorldState } from './state/useWorldState.js';
 import { ValidationBanner } from './state/ValidationBanner.js';
 import { ConflictPrompt } from './state/ConflictPrompt.js';
 import { CompareView } from './state/CompareView.js';
+import {
+  conflictKindForDirtyResources,
+  isCurrentConflictVersion,
+  mergeConflictKind,
+  type ConflictKind
+} from './state/conflictKinds.js';
 
 interface WorkspaceInfo {
   projectRoot: string;
@@ -58,7 +66,6 @@ function projectRootLabel(projectRoot: string): string {
 }
 
 type ConnectionStatus = 'connecting' | 'connected' | 'disconnected' | 'session-expired';
-
 type PendingDelete =
   | { kind: 'node'; nodeId: string; outgoingEdges: string[]; incomingEdges: string[]; requiredBy: string[] }
   | { kind: 'agent-confirm'; agentId: string }
@@ -77,15 +84,30 @@ export function App(): JSX.Element {
   const [layoutRunning, setLayoutRunning] = useState(false);
   const [showConflictPrompt, setShowConflictPrompt] = useState(false);
   const [showCompare, setShowCompare] = useState(false);
+  const [conflictKind, setConflictKind] = useState<ConflictKind | null>(null);
+  const [conflictVersion, setConflictVersion] = useState(0);
+  const conflictVersionRef = useRef(0);
 
   const world = useWorldState();
 
-  // Read by the SSE handler below, which is mounted once and must not
-  // reconnect the stream every time a mutation flips the dirty flag.
-  const dirtyRef = useRef(world.dirty);
+  const reloadWorldAndCleanLayout = useCallback(async (discardWorld = false): Promise<boolean> => {
+    const worldReloaded = await world.reloadWorld(discardWorld);
+    if (!worldReloaded) return false;
+    if (world.hasUnsavedLayout()) return true;
+    return world.reloadLayout();
+  }, [world.hasUnsavedLayout, world.reloadLayout, world.reloadWorld]);
+
+  const noteConflict = useCallback((incoming: ConflictKind): void => {
+    conflictVersionRef.current += 1;
+    setConflictVersion(conflictVersionRef.current);
+    setConflictKind(current => mergeConflictKind(current, incoming));
+  }, []);
+
   useEffect(() => {
-    dirtyRef.current = world.dirty;
-  }, [world.dirty]);
+    if (!world.layoutConflict) return;
+    noteConflict('layout');
+    setShowConflictPrompt(true);
+  }, [world.layoutConflict, noteConflict]);
 
   useEffect(() => {
     fetch('/api/workspace')
@@ -103,10 +125,24 @@ export function App(): JSX.Element {
 
     source.onopen = () => {
       setStatus('connected');
-      // Events published while disconnected are never replayed, so a
-      // reconnect re-fetches the world outright rather than trusting stale
-      // state. The very first connection does not count as a reconnect.
-      if (hasConnectedOnce) world.reload();
+      // Events published while disconnected are never replayed. On reconnect,
+      // each clean resource can refresh safely; only resources with local
+      // unsaved state need a conservative conflict. The first connection is
+      // startup, not a reconnect.
+      if (hasConnectedOnce) {
+        const worldDirty = world.hasUnsavedWorld();
+        const layoutDirty = world.hasUnsavedLayout();
+        const incoming = conflictKindForDirtyResources(worldDirty, layoutDirty);
+        if (incoming) {
+          if (layoutDirty) world.pauseLayoutAutosave();
+          if (!worldDirty) void reloadWorldAndCleanLayout();
+          if (!layoutDirty) void world.reloadLayout();
+          noteConflict(incoming);
+          setShowConflictPrompt(true);
+        } else {
+          world.reload();
+        }
+      }
       hasConnectedOnce = true;
     };
     source.onerror = () => {
@@ -133,15 +169,25 @@ export function App(): JSX.Element {
       // Studio's own writes are already reflected in local state; only an
       // externally sourced change needs the reload-or-conflict decision.
       if (studioEvent.source === 'studio') return;
-      if (dirtyRef.current) {
+      const isLayoutEvent = studioEvent.path.endsWith('world.layout.json');
+      if (isLayoutEvent) {
+        if (world.hasUnsavedLayout()) {
+          world.pauseLayoutAutosave();
+          noteConflict('layout');
+          setShowConflictPrompt(true);
+        } else {
+          void world.reloadLayout();
+        }
+      } else if (world.hasUnsavedWorld()) {
+        noteConflict('world');
         setShowConflictPrompt(true);
       } else {
-        world.reload();
+        void reloadWorldAndCleanLayout();
       }
     };
 
     return () => source.close();
-    // world.reload is stable (useCallback with no deps in useWorldState).
+    // Resource reload/query methods are stable callbacks in useWorldState.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
@@ -198,21 +244,56 @@ export function App(): JSX.Element {
 
   const handleAutoLayout = (): void => {
     if (!world.doc || layoutRunning) return;
+    const operationGeneration = world.getLayoutOperationGeneration();
     setLayoutRunning(true);
     computeAutoLayout(world.doc, world.layout)
-      .then(positions => world.setNodePositions(positions))
+      .then(positions => {
+        if (world.isLayoutOperationCurrent(operationGeneration)) world.setNodePositions(positions);
+      })
       .finally(() => setLayoutRunning(false));
   };
 
   const handleReload = (): void => {
-    world.reload();
-    setShowConflictPrompt(false);
-    setShowCompare(false);
+    const resolvingVersion = conflictVersionRef.current;
+    const reload: Promise<boolean> = conflictKind === 'world'
+      ? reloadWorldAndCleanLayout(true)
+      : conflictKind === 'layout'
+        ? world.reloadLayout(true)
+        : world.reloadWorld(true).then(succeeded => succeeded ? world.reloadLayout(true) : false);
+    void reload.then(succeeded => {
+      if (succeeded && isCurrentConflictVersion(conflictVersionRef.current, resolvingVersion)) {
+        setShowConflictPrompt(false);
+        setShowCompare(false);
+        setConflictKind(null);
+      }
+    });
   };
 
   const handleKeepStudioVersion = (): void => {
-    setShowConflictPrompt(false);
-    setShowCompare(false);
+    if (conflictKind === 'layout' || conflictKind === 'both') {
+      const resolvingVersion = conflictVersionRef.current;
+      void world.getCurrentLayoutRevision()
+        .then(revision => {
+          if (!isCurrentConflictVersion(conflictVersionRef.current, resolvingVersion)) return;
+          if (world.keepStudioLayout(revision)) {
+            setShowConflictPrompt(false);
+            setShowCompare(false);
+            setConflictKind(null);
+            return;
+          }
+          void world.reloadLayout().then(succeeded => {
+            if (!succeeded || !isCurrentConflictVersion(conflictVersionRef.current, resolvingVersion)) return;
+            setShowConflictPrompt(false);
+            setShowCompare(false);
+            setConflictKind(null);
+          });
+        })
+        .catch(() => {});
+    } else {
+      setShowConflictPrompt(false);
+      setShowCompare(false);
+      setConflictKind(null);
+    }
   };
 
   const agentIds = world.doc ? listAgentIds(world.doc) : [];
@@ -233,6 +314,7 @@ export function App(): JSX.Element {
               ? 'Event stream: session expired -- relaunch Studio and open the new URL to reconnect.'
               : `Event stream: ${status}`}
           </span>
+          {world.layoutSaving && <span>Saving layout...</span>}
           {world.doc && (
             <AddNodeForm
               agentIds={agentIds}
@@ -265,6 +347,12 @@ export function App(): JSX.Element {
           )}
         </header>
         <ValidationBanner errors={world.validationErrors} />
+        {world.layoutError && !world.layoutConflict && (
+          <div className="studio-validation-banner" role="alert">
+            <span>Layout autosave failed: {world.layoutError}</span>
+            <button type="button" onClick={world.retryLayoutSave}>Retry</button>
+          </div>
+        )}
         {world.loading && <p>Loading workspace...</p>}
         {world.error && <p role="alert">{world.error}</p>}
         {!world.loading &&
@@ -276,10 +364,12 @@ export function App(): JSX.Element {
                 layout={world.layout}
                 selectedNodeId={selectedNodeId}
                 onSelectNode={setSelectedNodeId}
+                onNodePositionsPreview={world.previewNodePositions}
                 onNodePositionsChange={world.setNodePositions}
                 onConnect={(source, target) => world.mutate(doc => connectEdge(doc, source, target))}
                 onDisconnect={(source, target) => world.mutate(doc => disconnectEdge(doc, source, target))}
                 onViewportChange={world.setViewport}
+                restoreGeneration={world.layoutLoadGeneration}
                 validationErrors={world.validationErrors}
               />
             </ReactFlowProvider>
@@ -375,9 +465,12 @@ export function App(): JSX.Element {
         />
       )}
 
-      {showCompare && world.doc && (
+      {showCompare && world.doc && conflictKind && (
         <CompareView
+          kind={conflictKind}
+          conflictVersion={conflictVersion}
           studioDoc={world.doc}
+          studioLayout={world.layout}
           onReload={handleReload}
           onKeepStudioVersion={handleKeepStudioVersion}
           onClose={() => setShowCompare(false)}
