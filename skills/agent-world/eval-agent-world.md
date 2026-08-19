@@ -67,7 +67,7 @@ Example:
   ],
   "complete": {
     "agent": "intake",
-    "content": "@architect\nPlease design the app."
+    "content": "@architect Please design the app."
   },
   "expect": {
     "type": "agent_instruction",

@@ -72,15 +72,18 @@ Example flow:
 
 When an agent needs real work, like file edits or tests, it does not do that work directly. It emits a host action request. The router returns `host_action`, Codex performs the approved work using normal tools, and the result goes back into the router.
 
-The router can return five result types:
+The router can return six result types:
 
-- `agent_instruction`: Codex should run one turn as the selected agent.
+- `agent_instruction`: Codex should dispatch one independent subagent to run the selected agent's turn.
+- `agent_instruction_batch`: several independent turns are pending and Codex should dispatch them in parallel, one subagent each. Only returned when `workflow.parallelDispatch` is `true`.
 - `host_action`: Codex may perform real host work requested by an agent.
 - `blocked`: the workflow cannot continue without user or config intervention.
 - `done`: Codex should return the final answer to the human.
-- `idle`: nothing is waiting.
+- `idle`: nothing is waiting, or every pending turn is already dispatched and listed in `awaitingTurns`.
 
-`blocked` is deliberate. It is what happens when the router refuses to guess, for example after an off-edge handoff, a turn-limit stop, or invalid routing state. The host should report the block and stop the loop instead of choosing a fallback agent.
+`blocked` is deliberate. It is what happens when the router refuses to guess: an off-edge handoff (`workflow_edge_blocked`), a mention naming no agent in the world (`unknown_mention_target`), or a turn-limit stop (`turn_limit_reached`). The host should report the block and stop the loop instead of choosing a fallback agent. A new top-level user message supersedes the block so any turns still pending at the time resume.
+
+Each `agent_instruction` also carries a `dispatch` object holding the per-agent `model`, `subagentType`, `tools`, and `contextLimit` configured in `world.json`, so the workflow decides how each turn is dispatched, not the host.
 
 The important rule: Codex does not pick the next agent. Codex always sends the latest message to the router and follows the one instruction the router returns.
 
@@ -88,8 +91,12 @@ The important rule: Codex does not pick the next agent. Codex always sends the l
 
 Each agent may set `contextScope` in `world.json`:
 
-- `global` receives the final 18 messages from the current run. Use it for collectors, judges, final synthesizers, and controllers that must merge independent work.
-- `agent` receives the current routed-from message plus up to 17 of that agent's most recent messages from the current run. Use it for isolated workers, reviewers, routers, and sequential specialists.
+- `global` receives the final messages from the current run, up to the agent's context limit. Use it for collectors, judges, final synthesizers, and controllers that must merge independent work.
+- `agent` is addressee-based. It receives the routed-from message, the latest message from each node listed in the workflow node's `requires`, every message addressed to that agent by a paragraph-start mention, and that agent's own messages. Use it for isolated workers, reviewers, routers, and sequential specialists.
+
+The context limit defaults to 18 messages and can be overridden per agent with `contextLimit`. The routed-from message and the `requires` messages are guaranteed: they are never dropped to satisfy the limit, because losing a lane the node was gated on is worse than exceeding the budget.
+
+Agent scope is addressee-based rather than author-based so a subagent, which has no memory outside the payload it is handed, always receives the messages that were actually sent to it. The `requires` guarantee means a fan-in node cannot be gated on a lane whose report it never sees.
 
 The router defaults omitted values to `global` so existing worlds keep their current behavior. Both the structured `context` and rendered host instruction use the same selected messages. The exact `routedFrom` message is also exposed separately for every scope.
 
@@ -156,7 +163,7 @@ The practical rules:
 - Leading whitespace is ignored.
 - Optional greeting prefixes before the mention are accepted: `hey`, `hi`, `hello`, and `to`.
 - Matching is case-insensitive after normalization. Spaces and most punctuation collapse to hyphens, so `@Review Captain`, `@review_captain`, and `@Review-Captain` can resolve to the same configured agent.
-- Display-name mentions can include a second TitleCase word, such as `@Madame Pedagogue`.
+- Display-name mentions can include a second TitleCase word, such as `@Madame Pedagogue`. Resolution is longest-match-first, so `@architect Please design the app.` still routes to `architect`.
 - Multi-target fan-out is line-oriented: put each target mention at the start of its own line or paragraph.
 - Self-mentions are removed from agent-authored routing targets.
 
@@ -169,11 +176,12 @@ Mentions still have to fit the workflow:
 - Nodes with `requires` do not run until their prerequisites are complete.
 - With `workflow.enforceEdges: true`, an off-edge mention returns `blocked` instead of falling back to another agent.
 - With `workflow.enforceEdges: false`, off-DAG agent mentions may fall back to direct agent routing.
+- A paragraph-start mention naming no configured agent returns `blocked` with `unknown_mention_target` rather than letting the run stall silently.
 
 World tags refine routing:
 
 - `<world>TO:a,b</world>` replaces leading paragraph mentions with explicit normalized recipients.
-- `<world>STOP</world>`, `<world>DONE</world>`, `<world>PASS</world>`, and the configured `world.stopToken` complete the run and suppress further routing.
+- `<world>STOP</world>`, `<world>DONE</world>`, `<world>PASS</world>`, and the configured `world.stopToken` complete the run and suppress further routing. Stop tokens inside fenced code blocks are ignored, so an agent can quote the protocol without ending the world.
 
 The router owns all of this. Agents should mention the intended next target, but the JSON workflow decides whether that target can actually run.
 

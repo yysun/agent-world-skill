@@ -80,12 +80,14 @@ Creation is host setup. Do not start the router loop until `.agent-world/world.j
    - `workflow.nodes` is an object keyed by workflow node id, not an array.
    - `workflow.edges` is an object whose keys are source node ids or `human`, and whose values are arrays of target node ids.
    - Do not write `id` inside each agent or node object; the object key is the id.
-   - Do not write edge objects such as `{ "from": "a", "to": "b" }`.
+   - Do not write edge objects such as `{ "from": "a", "to": "b" }`. The router rejects an array
+     `workflow.edges` and any edge-level `join` key as a configuration error; express joins with a
+     node-level `requires` array.
    - Workflow node objects may contain only `agent`, `instruction`, and `requires`.
    - Do not add semantic fields such as `type`, `kind`, `mode`, `join`, `state`, or `role` inside workflow nodes.
 12. Set `workflow.type` to the canonical kebab-case pattern id from "Workflow Patterns", such as `broadcast` or `sequential-pipeline`. Use `custom-dag` only for a customized user-defined workflow when the user explicitly asked for custom routing/workflow design or provided a custom graph. Do not write display labels such as `Broadcast`, `Sequential pipeline`, or implementation labels such as `dag` or `mention_graph` into generated worlds.
 13. Prefer `workflow.enforceEdges: true`. For loop-shaped patterns, keep `turnLimit` conservative and make the stop condition explicit in prompts.
-14. Agent entries in `world.json` must use `promptPath`, not inline prompt text, and must explicitly set `contextScope` from the selected pattern's required defaults below. Do not omit it from generated agents. Do not include `"$schema": "./world.schema.json"` in generated worlds unless a specific host/client owns that schema reference strategy.
+14. Agent entries in `world.json` must use `promptPath`, not inline prompt text, and must explicitly set `contextScope` from the selected pattern's required defaults below. Agents may optionally set `contextLimit`, `model`, `subagentType`, and `tools` to control how the host dispatches that agent's subagent; omit them unless the user asked for specific dispatch settings. Set `workflow.parallelDispatch` to `true` only for patterns with genuine independent lanes (`multi-agent-fan-out`, `fan-in-collector`, `broadcast`, `orchestrator-worker`). Do not omit it from generated agents. Do not include `"$schema": "./world.schema.json"` in generated worlds unless a specific host/client owns that schema reference strategy.
 15. Agent prompts must tell agents to use paragraph-start `@mentions`, stay inside the workflow, never run tools directly, request host work with an `agent-world-host-action` JSON block, and end final responses with `<world>pass</world>`.
 16. After writing `world.json`, validate it against `world.schema.json` before reporting success. If validation fails, fix `world.json` and rerun validation.
 17. After schema validation passes, run the deterministic eval script against the generated `world.json` and `world.eval.md`. If eval fails, fix the generated bundle and rerun eval before reporting success.

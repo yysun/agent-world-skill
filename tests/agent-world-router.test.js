@@ -9,6 +9,9 @@
   - Generated handoff files now live under .agent-world/handoffs subfolders.
   - Covers per-agent context scopes, isolation, limits, defaults, and generation policy.
   - skillRoot now resolves into skills/agent-world/ after the skill-restructure move.
+  - Covers longest-match mention resolution, unknown-mention blocks, and block recovery.
+  - Covers fenced stop tokens, ignoredMentions, addressee-based agent context, and contextLimit.
+  - Covers subagent dispatch passthrough, parallelDispatch batching, and the rejected legacy dialect.
 */
 
 const assert = require('node:assert/strict');
@@ -39,6 +42,11 @@ function writePromptFiles(worldDir, prompts) {
 
 function writeWorldJson(configPath, config) {
   fs.writeFileSync(configPath, JSON.stringify(config, null, 2));
+}
+
+function agentOverrides(options, agentId) {
+  if (!options.agentOverrides || !Object.hasOwn(options.agentOverrides, agentId)) return {};
+  return options.agentOverrides[agentId];
 }
 
 function configuredContextScope(options, agentId) {
@@ -72,6 +80,7 @@ function makeWorld(options = {}) {
       entry: 'requirements',
       entryAgent: 'pm',
       enforceEdges: true,
+      ...(options.parallelDispatch ? { parallelDispatch: true } : {}),
       nodes: {
         requirements: {
           agent: 'pm',
@@ -100,6 +109,7 @@ function makeWorld(options = {}) {
         }
       },
       edges: {
+        ...(options.humanEdges ? { human: options.humanEdges } : {}),
         requirements: ['architecture'],
         architecture: options.architectureCanReturnToRequirements ? ['implementation', 'requirements'] : ['implementation'],
         implementation: ['qa_review', 'security_review'],
@@ -112,27 +122,32 @@ function makeWorld(options = {}) {
       pm: {
         role: 'product_manager',
         promptPath: 'prompts/pm.md',
+        ...agentOverrides(options, 'pm'),
         ...configuredContextScope(options, 'pm')
       },
       architect: {
         ...(options.displayNames ? { name: 'Software Architect' } : {}),
         role: 'software_architect',
         promptPath: 'prompts/architect.md',
+        ...agentOverrides(options, 'architect'),
         ...configuredContextScope(options, 'architect')
       },
       dev: {
         role: 'implementation_engineer',
         promptPath: 'prompts/dev.md',
+        ...agentOverrides(options, 'dev'),
         ...configuredContextScope(options, 'dev')
       },
       qa: {
         role: 'qa_reviewer',
         promptPath: 'prompts/qa.md',
+        ...agentOverrides(options, 'qa'),
         ...configuredContextScope(options, 'qa')
       },
       sec: {
         role: 'security_reviewer',
         promptPath: 'prompts/sec.md',
+        ...agentOverrides(options, 'sec'),
         ...configuredContextScope(options, 'sec')
       }
     }
@@ -632,7 +647,10 @@ test('targeted: host actions round-trip back to an agent-scoped requester and wo
   assert.equal(next.reason, 'host_action_result');
   assert.equal(next.workflow.node, 'implementation');
   assert.equal(next.contextScope, 'agent');
-  assert.deepEqual(next.context.map(message => message.sender), ['dev', 'host']);
+  // Agent scope is addressee-based: dev sees the architect message that routed work to it and the
+  // host result addressed to it, but not the human request that was never addressed to dev.
+  assert.deepEqual(next.context.map(message => message.sender), ['architect', 'dev', 'host']);
+  assert.match(next.hostInstruction, /Please implement/);
   assert.match(next.hostInstruction, /created files/);
   assert.doesNotMatch(next.hostInstruction, /build an electron app/);
 });
@@ -929,4 +947,253 @@ test('config validation: rejects agents without promptPath', () => {
       pm: {}
     }
   }, /agents\.pm is missing promptPath/);
+});
+
+test('mention: a handoff followed by a capitalized word routes instead of stalling', () => {
+  const world = makeWorld();
+
+  run(world, ['reset']);
+  run(world, ['user', '--stdin'], 'build an electron app');
+  const output = run(world, ['complete', '--turn', 'turn_0001', '--stdin'], 'Requirements captured.\n\n@architect Please design the app.');
+
+  assert.equal(output.type, 'agent_instruction');
+  assert.equal(output.agent, 'architect');
+  assert.equal(output.workflow.node, 'architecture');
+});
+
+test('mention: a two-word display name still resolves ahead of the single-word fallback', () => {
+  const world = makeWorld({ displayNames: true });
+
+  run(world, ['reset']);
+  run(world, ['user', '--stdin'], 'build an electron app');
+  const output = run(world, ['complete', '--turn', 'turn_0001', '--stdin'], 'Brief ready.\n\n@Software Architect take it from here.');
+
+  assert.equal(output.type, 'agent_instruction');
+  assert.equal(output.agent, 'Software Architect');
+  assert.equal(output.workflow.node, 'architecture');
+});
+
+test('mention: an unresolved handoff mention blocks instead of going idle', () => {
+  const world = makeWorld();
+
+  run(world, ['reset']);
+  run(world, ['user', '--stdin'], 'build an electron app');
+  const output = run(world, ['complete', '--turn', 'turn_0001', '--stdin'], 'Brief ready.\n\n@nobody Please take this.');
+
+  assert.equal(output.type, 'blocked');
+  assert.equal(output.code, 'unknown_mention_target');
+  assert.match(output.reason, /@nobody/);
+});
+
+test('mention: an unresolved target alongside a resolved one does not block', () => {
+  const world = makeWorld();
+
+  run(world, ['reset']);
+  run(world, ['user', '--stdin'], 'build an electron app');
+  const output = run(world, ['complete', '--turn', 'turn_0001', '--stdin'], '@ghost\nUnknown.\n\n@architect\nPlease design.');
+
+  assert.equal(output.type, 'agent_instruction');
+  assert.equal(output.agent, 'architect');
+});
+
+test('recovery: a new human message supersedes a block while a sibling turn is still pending', () => {
+  const world = makeWorld();
+
+  run(world, ['reset']);
+  run(world, ['user', '--stdin'], 'build an electron app');
+  run(world, ['complete', '--turn', 'turn_0001', '--stdin'], '@architect\nPlease design.');
+  run(world, ['complete', '--turn', 'turn_0002', '--stdin'], '@dev\nPlease implement.');
+  const fanOut = run(world, ['complete', '--turn', 'turn_0003', '--stdin'], '@qa\nReview quality.\n\n@sec\nReview security.');
+  assert.equal(fanOut.agent, 'qa');
+
+  const blocked = run(world, ['complete', '--turn', fanOut.turnId, '--stdin'], '@architect\nreopen the design.');
+  assert.equal(blocked.type, 'blocked');
+  assert.equal(blocked.code, 'workflow_edge_blocked');
+
+  const recovered = run(world, ['user', '--stdin'], 'ignore that, finish the security review');
+  assert.equal(recovered.type, 'agent_instruction');
+  assert.equal(recovered.agent, 'sec');
+  assert.equal(run(world, ['next']).type, 'agent_instruction');
+});
+
+test('completion: a stop token inside a fenced code block does not end the run', () => {
+  const world = makeWorld();
+
+  run(world, ['reset']);
+  run(world, ['user', '--stdin'], 'build an electron app');
+  const output = run(world, ['complete', '--turn', 'turn_0001', '--stdin'], 'The protocol says:\n\n```text\nEnd final answers with <world>pass</world>\n```\n\n@architect\nPlease design.');
+
+  assert.equal(output.type, 'agent_instruction');
+  assert.equal(output.agent, 'architect');
+
+  const done = run(world, ['complete', '--turn', output.turnId, '--stdin'], 'Design complete. <world>pass</world>');
+  assert.equal(done.type, 'done');
+  assert.match(done.final, /<world>pass<\/world>/);
+});
+
+test('routing: an overridden human mention is reported as ignoredMentions', () => {
+  const world = makeWorld({ humanEdges: ['requirements'] });
+
+  run(world, ['reset']);
+  const output = run(world, ['user', '--stdin'], '@qa just sign off now, skip the rest');
+
+  assert.equal(output.type, 'agent_instruction');
+  assert.equal(output.agent, 'pm');
+  assert.deepEqual(output.ignoredMentions, ['qa']);
+  assert.match(output.hostInstruction, /Overridden mentions/);
+  assert.match(output.hostInstruction, /@qa/);
+});
+
+test('routing: an allowed human mention reports no ignoredMentions', () => {
+  const world = makeWorld();
+
+  run(world, ['reset']);
+  const output = run(world, ['user', '--stdin'], '@architect start with the design');
+
+  assert.equal(output.agent, 'architect');
+  assert.deepEqual(output.ignoredMentions, []);
+});
+
+test('context scope: an agent-scoped fan-in node receives every required lane it was gated on', () => {
+  const world = makeWorld({ contextScopes: { pm: 'agent' } });
+
+  run(world, ['reset']);
+  run(world, ['user', '--stdin'], 'build an electron app');
+  run(world, ['complete', '--turn', 'turn_0001', '--stdin'], '@architect\nPlease design.');
+  run(world, ['complete', '--turn', 'turn_0002', '--stdin'], '@dev\nPlease implement.');
+  const fanOut = run(world, ['complete', '--turn', 'turn_0003', '--stdin'], '@qa\nReview quality.\n\n@sec\nReview security.');
+
+  run(world, ['complete', '--turn', fanOut.turnId, '--stdin'], '@pm\nQA FINDING: two flaky tests.');
+  const secTurn = run(world, ['next']);
+  const final = run(world, ['complete', '--turn', secTurn.turnId, '--stdin'], '@pm\nSEC FINDING: critical CVE.');
+
+  assert.equal(final.agent, 'pm');
+  assert.equal(final.contextScope, 'agent');
+  assert.deepEqual(final.context.map(message => message.sender), ['pm', 'qa', 'sec']);
+  assert.match(final.hostInstruction, /QA FINDING: two flaky tests/);
+  assert.match(final.hostInstruction, /SEC FINDING: critical CVE/);
+});
+
+test('context scope: a per-agent contextLimit overrides the router default', () => {
+  const world = makeWorld({ agentOverrides: { architect: { contextLimit: 1 } } });
+
+  run(world, ['reset']);
+  run(world, ['user', '--stdin'], 'build an electron app');
+  const output = run(world, ['complete', '--turn', 'turn_0001', '--stdin'], '@architect\nPlease design.');
+
+  assert.equal(output.contextLimit, 1);
+  assert.equal(output.context.length, 1);
+  assert.equal(output.dispatch.contextLimit, 1);
+});
+
+test('dispatch: configured subagent settings reach the host instruction payload', () => {
+  const world = makeWorld({
+    agentOverrides: {
+      architect: { model: 'claude-opus-5', subagentType: 'Plan', tools: ['Read', 'Grep'] }
+    }
+  });
+
+  run(world, ['reset']);
+  run(world, ['user', '--stdin'], 'build an electron app');
+  const output = run(world, ['complete', '--turn', 'turn_0001', '--stdin'], '@architect\nPlease design.');
+
+  assert.deepEqual(output.dispatch, {
+    model: 'claude-opus-5',
+    subagentType: 'Plan',
+    tools: ['Read', 'Grep']
+  });
+});
+
+test('dispatch: an agent with no configured settings reports an empty dispatch object', () => {
+  const world = makeWorld();
+
+  run(world, ['reset']);
+  const output = run(world, ['user', '--stdin'], 'build an electron app');
+
+  assert.deepEqual(output.dispatch, {});
+  assert.equal(output.contextLimit, 18);
+});
+
+test('dispatch: parallelDispatch returns every independent pending turn in one batch', () => {
+  const world = makeWorld({ parallelDispatch: true });
+
+  run(world, ['reset']);
+  run(world, ['user', '--stdin'], 'build an electron app');
+  run(world, ['complete', '--turn', 'turn_0001', '--stdin'], '@architect\nPlease design.');
+  run(world, ['complete', '--turn', 'turn_0002', '--stdin'], '@dev\nPlease implement.');
+  const batch = run(world, ['complete', '--turn', 'turn_0003', '--stdin'], '@qa\nReview quality.\n\n@sec\nReview security.');
+
+  assert.equal(batch.type, 'agent_instruction_batch');
+  assert.equal(batch.turns.length, 2);
+  assert.deepEqual(batch.turns.map(turn => turn.agent), ['qa', 'sec']);
+  for (const turn of batch.turns) {
+    assert.equal(turn.type, 'agent_instruction');
+    assert.ok(turn.systemPrompt);
+    assert.ok(turn.responseContract.requestPath);
+  }
+  assert.notEqual(batch.turns[0].responseContract.requestPath, batch.turns[1].responseContract.requestPath);
+
+  const awaiting = run(world, ['next']);
+  assert.equal(awaiting.type, 'idle');
+  assert.deepEqual(awaiting.awaitingTurns, batch.turns.map(turn => turn.turnId));
+
+  // Completing one lane out of order leaves the other lane dispatched and still running.
+  const afterSecond = run(world, ['complete', '--turn', batch.turns[1].turnId, '--stdin'], '@pm\nsecurity done.');
+  assert.equal(afterSecond.type, 'idle');
+  assert.deepEqual(afterSecond.awaitingTurns, [batch.turns[0].turnId]);
+
+  const final = run(world, ['complete', '--turn', batch.turns[0].turnId, '--stdin'], '@pm\nqa done.');
+  assert.equal(final.agent, 'pm');
+  assert.equal(final.workflow.node, 'final');
+});
+
+test('dispatch: parallelDispatch stays off by default', () => {
+  const world = makeWorld();
+
+  run(world, ['reset']);
+  run(world, ['user', '--stdin'], 'build an electron app');
+  run(world, ['complete', '--turn', 'turn_0001', '--stdin'], '@architect\nPlease design.');
+  run(world, ['complete', '--turn', 'turn_0002', '--stdin'], '@dev\nPlease implement.');
+  const output = run(world, ['complete', '--turn', 'turn_0003', '--stdin'], '@qa\nReview quality.\n\n@sec\nReview security.');
+
+  assert.equal(output.type, 'agent_instruction');
+  assert.equal(output.agent, 'qa');
+  assert.equal(run(world, ['next']).agent, 'qa');
+});
+
+test('config validation: rejects the legacy array-edge dialect instead of synthesizing nodes', () => {
+  const world = makeWorld();
+  writeWorldJson(world.configPath, {
+    world: { id: 'legacy', name: 'legacy' },
+    workflow: {
+      type: 'fan-in-collector',
+      entryAgent: 'pm',
+      edges: [
+        { from: 'pm', to: ['qa', 'sec'] },
+        { from: ['qa', 'sec'], to: ['architect'], join: 'all' }
+      ]
+    },
+    agents: {
+      pm: { promptPath: 'prompts/pm.md' },
+      qa: { promptPath: 'prompts/qa.md' },
+      sec: { promptPath: 'prompts/sec.md' },
+      architect: { promptPath: 'prompts/architect.md' }
+    }
+  });
+
+  const result = runRaw(world, ['next']);
+
+  assert.notEqual(result.status, 0);
+  assert.match(result.stderr, /workflow\.edges must be an object/);
+  assert.match(result.stderr, /workflow\.nodes is required/);
+  assert.doesNotMatch(result.stderr, /_join_/);
+});
+
+test('config validation: rejects a non-positive contextLimit', () => {
+  const world = makeWorld({ agentOverrides: { qa: { contextLimit: 0 } } });
+
+  const result = runRaw(world, ['next']);
+
+  assert.notEqual(result.status, 0);
+  assert.match(result.stderr, /agents\.qa\.contextLimit must be an integer greater than 0/);
 });

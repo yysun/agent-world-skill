@@ -9,6 +9,34 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Subagent dispatch contract: `agent_instruction` now carries `dispatch` (`model`, `subagentType`,
+  `tools`, `contextLimit`) and `SKILL.md` directs the host to run each turn in an independent
+  subagent instead of role-playing it inline.
+- Opt-in parallel dispatch via `workflow.parallelDispatch`, returning an `agent_instruction_batch`
+  of every independent pending turn, with dispatched turns reported as `awaitingTurns` rather than
+  offered twice.
+- Per-agent `contextLimit` overriding the default context budget of 18 messages.
+- `unknown_mention_target` routing block for a paragraph-start mention that names no agent.
+- `ignoredMentions` on `agent_instruction`, reporting human mentions the workflow entry overrode.
+
+### Fixed
+
+- A handoff such as `@architect Please design the app.` no longer fails to resolve. Mention labels
+  now resolve longest-match-first, so two-word display names still work while a capitalized word
+  after the mention no longer swallows the target. Previously this ended the run silently at `idle`.
+- A blocked run can now be recovered: a new human message supersedes the run's outstanding routing
+  errors so still-pending lanes resume, instead of the run staying blocked until `reset`.
+- A stop token inside a fenced code block no longer completes the run.
+- `contextScope: "agent"` is now addressee-based and guarantees the latest message from each node in
+  a workflow node's `requires`, so a fan-in agent no longer silently loses a lane's report.
+
+### Changed
+
+- **Breaking:** the router rejects the legacy `workflow.edges` array dialect and edge-level `join`
+  keys, and requires `workflow.nodes`. These were already invalid under `world.schema.json` and made
+  the router synthesize workflow node ids that appeared in no file. Use object-form edges and
+  node-level `requires`.
+
 - Agent World Studio workflow editor: a visual "Design surface" for building and inspecting agent workflows.
 - Studio server for running Agent World Studio locally.
 - Agent World eval runner for testing agent workflows.

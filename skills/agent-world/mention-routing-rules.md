@@ -11,8 +11,16 @@ Agent World only treats paragraph-beginning `@mentions` as routing signals. A me
 - An agent-authored message only targets agents whose ids match paragraph-beginning mentions.
 - Mention parsing ignores leading whitespace and optional greeting prefixes such as `hey`, `hi`, `hello`, and `to`.
 - Display-name mentions can span a second TitleCase word, so forms like `@Madame Pedagogue` normalize correctly.
+- Resolution is longest-match-first: the two-word display name is tried first, and when it matches no
+  agent the single-word id is used. This is why `@architect Please design the app.` routes to
+  `architect` while `@Madame Pedagogue` still routes to that display name.
 - Matching is case-insensitive after normalization; spaces and most punctuation collapse to hyphens.
 - Multi-target fan-out is line-oriented: use one paragraph-beginning mention per paragraph or line.
+  In practice the parser is line-oriented throughout, so a mention at the start of any line routes.
+- A paragraph-beginning mention that resolves to no agent is a routing error, not a no-op. When an
+  agent-authored message has no resolved mention, its node has outgoing edges, and it contains an
+  unresolved paragraph-start mention, the router returns `blocked` with code `unknown_mention_target`
+  rather than letting the run stall.
 
 ## Main-Agent Fallback
 

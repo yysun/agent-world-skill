@@ -32,7 +32,8 @@ Agent World owns:
 The host executor owns:
 
 - sending every scoped message to the router
-- executing exactly one returned `agent_instruction`
+- dispatching each returned `agent_instruction` to one independent subagent
+- dispatching every turn in an `agent_instruction_batch` in parallel
 - executing native tools only when the router returns `host_action`
 - passing each result back to the router
 - returning the final answer only when the router returns `done`
@@ -101,9 +102,24 @@ node "$ROUTER" file --request .agent-world/handoffs/requests/request-20260526T14
 
 Read the structured payload from the matching timestamped result file under `.agent-world/handoffs/responses/` and follow its `type`. Treat stdout or the tool result as a brief status notification only. Do not parse the real router payload from stdout.
 
+If the router exits non-zero it writes **no result file**. That is a configuration or protocol error,
+not a routing outcome. Read the error JSON the router printed on stderr, report it to the user, and
+stop; do not retry the same request and do not invent a result.
+
+## Agent Communication Model
+
+Agents never address each other directly. An `@mention` is a routing directive to the router, not
+message delivery: the router reads the mention, checks the workflow edge, queues the next turn, and
+hands the mentioned agent that message as context on its own turn. Subagents cannot message peers,
+and must not try to.
+
+The consequence for you as host: never forward one agent's output to another agent yourself. Return
+it to the router and dispatch whatever the router returns next.
+
 ## `agent_instruction`
 
-The router returns the selected agent, loaded prompt, workflow node, context, and dynamic host instruction:
+The router returns the selected agent, loaded prompt, workflow node, context, subagent dispatch
+settings, and dynamic host instruction:
 
 - `turnId`
 - `agent`
@@ -112,20 +128,39 @@ The router returns the selected agent, loaded prompt, workflow node, context, an
 - `systemPrompt`
 - `context`
 - `contextScope`
+- `contextLimit`
+- `dispatch` - optional `model`, `subagentType`, `tools`, `contextLimit` from `world.json`
+- `ignoredMentions` - agents the user mentioned that workflow edges did not allow
 - `hostInstruction`
 - `responseContract.completeByRunning`
 - `responseContract.requestPath`
 - `responseContract.resultPath`
 
-Run exactly one turn as the named agent. Use `hostInstruction` as the execution brief. Produce one markdown message as that agent.
+Dispatch this turn to **one independent subagent**. Start it with no inherited conversation history
+when the runtime supports that, so `contextScope` is enforced at generation time rather than by
+request. Pass `hostInstruction` as its prompt: it already embeds `systemPrompt`, the workflow node,
+the allowed next nodes, the routed-from message, and the scoped `context`. Honor `dispatch.model`,
+`dispatch.subagentType`, and `dispatch.tools` when the runtime supports them. If the runtime cannot
+spawn a subagent, run the turn inline as that agent and say so in your report; do not silently
+present inline role-play as subagent orchestration.
 
-`contextScope` is configured per agent. `global` includes the final 18 messages from the current run. `agent` includes the current routed-from message plus up to 17 of that agent's recent messages from the current run. The router must use the same selected messages in `context` and the rendered `hostInstruction`; do not supplement scoped context yourself.
+Take the subagent's final message verbatim as the completion `content`.
+
+`contextScope` is configured per agent and capped by `contextLimit` (default 18). `global` includes
+the final N messages from the current run. `agent` includes the routed-from message, the latest
+message from each node listed in the workflow node's `requires`, every message addressed to that
+agent, and that agent's own messages. The routed-from and `requires` messages are guaranteed and are
+never dropped to satisfy `contextLimit`; only the remaining fill is capped. The router uses the same selected messages in `context` and in
+the rendered `hostInstruction`; do not supplement scoped context yourself.
+
+When `ignoredMentions` is non-empty, tell the user which of their mentions the workflow overrode.
 
 Rules:
 
 - Do not answer as the host executor.
-- Do not call tools during an agent turn.
-- If the agent needs filesystem, shell, web, Git, or other host work, emit an `agent-world-host-action` JSON block.
+- Do not call tools yourself on behalf of an agent turn.
+- If the agent needs filesystem, shell, web, Git, or other host work, it emits an
+  `agent-world-host-action` JSON block and you return that block's turn to the router unchanged.
 - If the agent hands off with a paragraph-start mention such as `@architect`, stop after that handoff.
 - Immediately write the agent message back to the timestamped file from `responseContract.requestPath`:
 
@@ -179,31 +214,60 @@ Suggested result:
 
 Then run the command from `responseContract.completeByRunning` and read the next instruction from `responseContract.resultPath`.
 
+## `agent_instruction_batch`
+
+Returned only when `world.json` sets `workflow.parallelDispatch` to `true` and more than one
+independent turn is pending. The payload carries `turns`, an array of complete `agent_instruction`
+objects.
+
+Dispatch every turn in `turns` in parallel, one independent subagent per turn. Each turn carries its
+own `responseContract.requestPath` and `resultPath`, so completions are independent and may be
+written back in any order.
+
+The router marks batched turns as dispatched. Until they complete, it returns `idle` with an
+`awaitingTurns` list instead of offering the same turns again. Do not re-dispatch a turn named in
+`awaitingTurns`.
+
 ## `done`
 
 Return the router's `final` content. Stop.
 
 ## `blocked`
 
-The router found a workflow problem it will not improvise around, such as an off-edge handoff, a turn-limit stop, or invalid routing state.
+The router found a workflow problem it will not improvise around. `code` identifies which:
+
+- `workflow_edge_blocked` - an agent mentioned a target no workflow edge allows from its node.
+- `unknown_mention_target` - an agent used a paragraph-start mention naming no agent in this world.
+  `unresolvedMentions` lists the tokens. This usually means the agent's prompt names an agent that
+  `world.json` does not define, or misspells one.
+- `turn_limit_reached` - the run hit `world.turnLimit`.
 
 Report the `reason` to the user and stop the Agent World loop. Do not pick a fallback agent, bypass the DAG, or continue until the user gives a new top-level request or fixes the workflow.
+
+A new top-level user message supersedes the run's outstanding routing errors, so any turns that were
+still pending when the block occurred resume on the next router call.
 
 ## `idle`
 
 No work is pending. Report that the Agent World workflow is idle.
 
+If `awaitingTurns` is present, the listed turns were already dispatched and have not been completed
+yet. Finish those turns instead of reporting idle to the user.
+
 ## Driver Loop
 
-Repeat until `type` is `done`, `blocked`, or `idle`:
+Repeat until `type` is `done`, `blocked`, or an `idle` with no `awaitingTurns`. An `idle` that
+carries `awaitingTurns` is not a stopping point: complete those dispatched turns and continue.
+
 
 1. Write the user message or previous completion to a timestamped file under `./.agent-world/handoffs/requests/`.
 2. Run `node "$ROUTER" file --request .agent-world/handoffs/requests/request-<timestamp>.json --result .agent-world/handoffs/responses/result-<timestamp>.json`.
 3. Read the returned JSON from the matching timestamped result file under `./.agent-world/handoffs/responses/`.
-4. If `agent_instruction`, run exactly one agent turn and complete it.
-5. If `host_action`, execute the host action and complete it.
-6. If `blocked`, report the block and stop.
-7. If `done`, return the final content.
+4. If `agent_instruction`, dispatch one subagent for that turn and complete it.
+5. If `agent_instruction_batch`, dispatch every turn in parallel and complete each one.
+6. If `host_action`, execute the host action and complete it.
+7. If `blocked`, report the block and stop.
+8. If `done`, return the final content.
 
 ## Reset
 

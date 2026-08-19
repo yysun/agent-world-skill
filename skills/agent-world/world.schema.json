@@ -75,6 +75,11 @@
           "type": "boolean",
           "default": true
         },
+        "parallelDispatch": {
+          "description": "When true, the router returns every independent pending turn together so the host can dispatch them to subagents in parallel.",
+          "type": "boolean",
+          "default": false
+        },
         "nodes": {
           "type": "object",
           "minProperties": 1,
@@ -181,6 +186,27 @@
           "type": "string",
           "enum": ["global", "agent"],
           "default": "global"
+        },
+        "contextLimit": {
+          "description": "Maximum context messages delivered to this agent. Overrides the router default when set.",
+          "type": "integer",
+          "minimum": 1
+        },
+        "model": {
+          "description": "Host-specific model id the subagent for this agent should run on.",
+          "type": "string",
+          "minLength": 1
+        },
+        "subagentType": {
+          "description": "Host-specific subagent type used to dispatch this agent's turns.",
+          "type": "string",
+          "minLength": 1
+        },
+        "tools": {
+          "description": "Host-specific tool names this agent's subagent may use. The router does not interpret these.",
+          "type": "array",
+          "items": { "type": "string", "minLength": 1 },
+          "uniqueItems": true
         }
       }
     }

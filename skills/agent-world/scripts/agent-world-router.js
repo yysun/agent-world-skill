@@ -14,6 +14,14 @@
   - Moved generated handoff files under .agent-world/handoffs/requests and
     .agent-world/handoffs/responses.
   - Added per-agent global or agent-only context selection for host instructions.
+  - Mention labels now resolve longest-match-first so @agent Capitalized handoffs route.
+  - Unresolved handoff mentions block instead of stalling the run silently.
+  - A new human message supersedes a run's outstanding routing errors.
+  - Stop-token detection ignores fenced code blocks.
+  - Human mentions overridden by the workflow entry are reported as ignoredMentions.
+  - Agent-scope context is addressee-based and guarantees each requires node's latest message.
+  - Added opt-in workflow.parallelDispatch batching plus per-agent subagent dispatch settings.
+  - Rejected the legacy array-edge/join config dialect; workflow.nodes is now required.
 */
 
 const fs = require('fs');
@@ -23,7 +31,7 @@ const ROUTER_COMMAND = 'node "$ROUTER"';
 const DEFAULT_STATE_PATH = process.env.AGENT_WORLD_STATE || path.join(process.cwd(), '.agent-world', 'agent-world-state.json');
 const DEFAULT_CONFIG_PATH = process.env.AGENT_WORLD_CONFIG || path.join(process.cwd(), '.agent-world', 'world.json');
 const DEFAULT_CONTEXT_SCOPE = 'global';
-const CONTEXT_LIMIT = 18;
+const DEFAULT_CONTEXT_LIMIT = 18;
 const CONTEXT_SCOPES = new Set(['global', 'agent']);
 let activeStatePath = DEFAULT_STATE_PATH;
 
@@ -103,6 +111,37 @@ function normalizeAgents(parsed, configPath) {
   return agents;
 }
 
+const LEGACY_EDGE_HELP = 'Define workflow.nodes as an object keyed by node id and workflow.edges as an object mapping each source node id (or "human") to an array of target node ids. Express joins with a node-level "requires" array, not an edge-level "join" key.';
+
+function assertSupportedWorkflowShape(raw) {
+  const errors = [];
+
+  if (Array.isArray(raw.edges)) {
+    errors.push('workflow.edges must be an object, not an array of from/to entries');
+  } else if (raw.edges && typeof raw.edges === 'object') {
+    for (const [source, targets] of Object.entries(raw.edges)) {
+      if (targets && !Array.isArray(targets) && typeof targets === 'object') {
+        errors.push(`workflow.edges.${source} must be an array of target node ids`);
+      }
+    }
+  }
+
+  for (const edge of Array.isArray(raw.edges) ? raw.edges : []) {
+    if (edge && typeof edge === 'object' && edge.join !== undefined) {
+      errors.push('workflow edges no longer support a "join" key');
+      break;
+    }
+  }
+
+  if (!raw.nodes || typeof raw.nodes !== 'object' || Array.isArray(raw.nodes)) {
+    errors.push('workflow.nodes is required and must be an object keyed by node id');
+  }
+
+  if (errors.length > 0) {
+    throw new Error(`Invalid Agent World config:\n- ${errors.join('\n- ')}\n\n${LEGACY_EDGE_HELP}`);
+  }
+}
+
 function normalizeWorkflow(parsed, agents) {
   const raw = parsed.workflow || {};
   const routing = parsed.routing || {};
@@ -111,45 +150,15 @@ function normalizeWorkflow(parsed, agents) {
     entry: raw.entry || null,
     entryAgent: raw.entryAgent || routing.noMentionFromHumanGoesTo || parsed.world && parsed.world.entryAgent,
     enforceEdges: raw.enforceEdges !== false,
+    parallelDispatch: raw.parallelDispatch === true,
     nodes: {},
     edges: {}
   };
 
-  if (raw.nodes) {
-    workflow.nodes = raw.nodes;
-    workflow.edges = raw.edges || {};
-    return workflow;
-  }
+  assertSupportedWorkflowShape(raw);
 
-  for (const agentId of Object.keys(agents)) {
-    workflow.nodes[agentId] = {
-      agent: agentId,
-      instruction: ''
-    };
-  }
-
-  let joinCounter = 0;
-  for (const edge of Array.isArray(raw.edges) ? raw.edges : []) {
-    const fromNodes = asArray(edge.from);
-    let toNodes = asArray(edge.to);
-
-    if (edge.join === 'all') {
-      toNodes = toNodes.map(to => {
-        joinCounter += 1;
-        const nodeId = `${to}_join_${joinCounter}`;
-        workflow.nodes[nodeId] = {
-          agent: to,
-          requires: fromNodes,
-          instruction: `Join after ${fromNodes.join(', ')} complete.`
-        };
-        return nodeId;
-      });
-    }
-
-    for (const from of fromNodes) {
-      workflow.edges[from] = [...(workflow.edges[from] || []), ...toNodes];
-    }
-  }
+  workflow.nodes = raw.nodes;
+  workflow.edges = raw.edges || {};
 
   if (!workflow.entry) workflow.entry = workflow.entryAgent;
   if (!workflow.entryAgent && workflow.entry && workflow.nodes[workflow.entry]) {
@@ -168,6 +177,12 @@ function validateConfig(config) {
   for (const [agentId, agent] of Object.entries(agents)) {
     if (!CONTEXT_SCOPES.has(agent.contextScope)) {
       errors.push(`agents.${agentId}.contextScope must be one of: ${[...CONTEXT_SCOPES].join(', ')}`);
+    }
+    if (agent.contextLimit !== undefined && (!Number.isInteger(agent.contextLimit) || agent.contextLimit < 1)) {
+      errors.push(`agents.${agentId}.contextLimit must be an integer greater than 0`);
+    }
+    if (agent.tools !== undefined && !Array.isArray(agent.tools)) {
+      errors.push(`agents.${agentId}.tools must be an array of tool names`);
     }
   }
 
@@ -384,15 +399,37 @@ function resolveMentionTarget(state, rawTarget) {
   return agentMentionAliases(state).get(alias) || null;
 }
 
-function extractMentionLabelFromLine(line) {
+function resolveMentionTargetFromLine(state, line) {
+  for (const candidate of mentionLabelCandidatesFromLine(line)) {
+    const target = resolveMentionTarget(state, candidate);
+    if (target) return target;
+  }
+  return null;
+}
+
+function unresolvedMentionTokensFromLine(state, line) {
+  const candidates = mentionLabelCandidatesFromLine(line);
+  if (candidates.length === 0) return null;
+  if (resolveMentionTargetFromLine(state, line)) return null;
+  return candidates[candidates.length - 1];
+}
+
+function mentionLabelCandidatesFromLine(line) {
   let rest = String(line || '').trimStart();
   const greeting = rest.match(/^(hey|hi|hello|to)\b[\s,:-]+/i);
   if (greeting) rest = rest.slice(greeting[0].length);
 
   const mention = rest.match(/^@([A-Za-z][A-Za-z0-9_.-]*)(?:[ \t]+([A-Z][A-Za-z0-9_.-]*))?/);
-  if (!mention) return null;
-  return [mention[1], mention[2]].filter(Boolean).join(' ');
+  if (!mention) return [];
+
+  // Longest match first: a two-word display name such as "@Madame Pedagogue" wins when it
+  // resolves, otherwise fall back to the single-word id so "@architect Please design." routes.
+  const candidates = [];
+  if (mention[2]) candidates.push(`${mention[1]} ${mention[2]}`);
+  candidates.push(mention[1]);
+  return candidates;
 }
+
 
 function extractWorldToMentions(content, state) {
   const match = String(content || '').match(/<world>\s*TO\s*:\s*([^<]+?)\s*<\/world>/i);
@@ -411,7 +448,9 @@ function extractWorldToMentions(content, state) {
 }
 
 function hasWorldCompletionTag(content, state) {
-  const text = String(content || '');
+  // Detection ignores fenced blocks so an agent quoting the protocol cannot end the run.
+  // state.final is still recorded from the original, unstripped message.
+  const text = stripCodeFences(content);
   if (state.world.stopToken && text.includes(state.world.stopToken)) return true;
   return /<world>\s*(STOP|DONE|PASS)\s*<\/world>/i.test(text);
 }
@@ -419,7 +458,7 @@ function hasWorldCompletionTag(content, state) {
 function stripLeadingMentionLines(content, state) {
   return String(content || '')
     .split(/\r?\n/)
-    .filter(line => !resolveMentionTarget(state, extractMentionLabelFromLine(line)))
+    .filter(line => !resolveMentionTargetFromLine(state, line))
     .join('\n')
     .replace(/^\s+/, '')
     .trimEnd();
@@ -433,13 +472,26 @@ function extractParagraphMentions(content, state, sender = null) {
   const mentions = [];
   const seen = new Set();
   for (const line of text.split(/\r?\n/)) {
-    const target = resolveMentionTarget(state, extractMentionLabelFromLine(line));
+    const target = resolveMentionTargetFromLine(state, line);
     if (target && target !== sender && !seen.has(target)) {
       seen.add(target);
       mentions.push(target);
     }
   }
   return mentions;
+}
+
+function extractUnresolvedMentions(content, state) {
+  const tokens = [];
+  const seen = new Set();
+  for (const line of stripCodeFences(content).split(/\r?\n/)) {
+    const token = unresolvedMentionTokensFromLine(state, line);
+    if (token && !seen.has(token)) {
+      seen.add(token);
+      tokens.push(token);
+    }
+  }
+  return tokens;
 }
 
 function withoutMeta(obj) {
@@ -549,6 +601,16 @@ function turnLimitReached(state) {
   return completed >= limit;
 }
 
+function supersedePendingRoutingErrors(state) {
+  // A new top-level request is the documented recovery path out of a blocked run.
+  for (const error of state.pendingRoutingErrors) {
+    if (isCurrentRun(state, error) && error.status === 'pending') {
+      error.status = 'superseded';
+      error.supersededAt = now();
+    }
+  }
+}
+
 function queueRoutingError(state, error) {
   const runId = currentRunId(state);
   const duplicate = state.pendingRoutingErrors.some(item => (
@@ -571,7 +633,7 @@ function queueRoutingError(state, error) {
   return blocked;
 }
 
-function queueTurn(state, agent, sourceMessageId, reason = 'mention', workflowNodeId = null) {
+function queueTurn(state, agent, sourceMessageId, reason = 'mention', workflowNodeId = null, extra = {}) {
   if (!state.agents[agent]) return null;
   if (state.done) return null;
   if (turnLimitReached(state)) {
@@ -601,16 +663,18 @@ function queueTurn(state, agent, sourceMessageId, reason = 'mention', workflowNo
     sourceMessageId,
     reason,
     status: 'pending',
-    createdAt: now()
+    dispatched: false,
+    createdAt: now(),
+    ...extra
   };
   state.pendingTurns.push(turn);
   return turn;
 }
 
-function queueWorkflowNode(state, nodeId, sourceMessageId, reason) {
+function queueWorkflowNode(state, nodeId, sourceMessageId, reason, extra = {}) {
   const agent = agentForNode(state, nodeId);
   if (!agent) return null;
-  return queueTurn(state, agent, sourceMessageId, reason, nodeId);
+  return queueTurn(state, agent, sourceMessageId, reason, nodeId, extra);
 }
 
 function autoReplyMentionTarget(state, msg) {
@@ -646,6 +710,7 @@ function processMessageForRouting(state, msg) {
   let mentions = extractParagraphMentions(msg.content, state, isAgent ? msg.sender : null);
 
   if (msg.sender === 'human') {
+    const explicitMentions = [...mentions];
     if (mentions.length === 0 && state.world.mainAgent) {
       const mainAgent = resolveMentionTarget(state, state.world.mainAgent);
       if (mainAgent) mentions = [mainAgent];
@@ -666,7 +731,11 @@ function processMessageForRouting(state, msg) {
       }
     }
     if (state.workflow.entry) {
-      queueWorkflowNode(state, state.workflow.entry, msg.id, 'entry_workflow_node');
+      // The DAG wins, but never silently: tell the host which explicit mentions it overrode.
+      // Only the human's own mentions count here; a world.mainAgent fallback was never typed.
+      const ignoredMentions = explicitMentions.filter(target => agentForNode(state, state.workflow.entry) !== target);
+      queueWorkflowNode(state, state.workflow.entry, msg.id, 'entry_workflow_node',
+        ignoredMentions.length > 0 ? { ignoredMentions } : {});
       return;
     }
     const targets = mentions.length > 0 ? mentions : [state.workflow.entryAgent || state.world.entryAgent];
@@ -689,6 +758,24 @@ function processMessageForRouting(state, msg) {
 
     if (state.workflow.enforceEdges && currentNode) {
       const allowedNext = allowedNextNodes(state, currentNode);
+
+      // A handoff that names nobody must surface, not stall the run at idle.
+      if (mentions.length === 0 && allowedNext.length > 0) {
+        const unresolved = extractUnresolvedMentions(msg.content, state);
+        if (unresolved.length > 0) {
+          queueRoutingError(state, {
+            reason: `Agent @${msg.sender} used a paragraph-start mention of ${unresolved.map(token => `@${token}`).join(', ')}, which matches no agent in this world.`,
+            code: 'unknown_mention_target',
+            sourceMessageId: msg.id,
+            sourceAgent: msg.sender,
+            sourceNode: currentNode,
+            unresolvedMentions: unresolved,
+            allowedNext
+          });
+        }
+        return;
+      }
+
       const invalidMentions = mentions.filter(target => !allowedNext.some(nodeId => agentForNode(state, nodeId) === target));
       if (invalidMentions.length > 0) {
         const invalidTargets = invalidMentions.map(target => ({
@@ -737,20 +824,55 @@ function compactMessages(messages) {
   }));
 }
 
-function compactContext(state, turn, limit = CONTEXT_LIMIT) {
+function contextLimitForAgent(agent) {
+  const configured = agent && agent.contextLimit;
+  return Number.isInteger(configured) && configured > 0 ? configured : DEFAULT_CONTEXT_LIMIT;
+}
+
+function messageAddressesAgent(state, message, agentId) {
+  if (message.sender === agentId) return false;
+  return extractParagraphMentions(message.content, state, message.sender).includes(agentId);
+}
+
+function requiredNodeMessages(state, turn, runMessages) {
+  const node = workflowNode(state, turn.workflowNode);
+  const required = node && Array.isArray(node.requires) ? node.requires : [];
+  const selected = [];
+  for (const requiredNode of required) {
+    const last = [...runMessages]
+      .reverse()
+      .find(message => message.metadata && message.metadata.workflowNode === requiredNode);
+    if (last) selected.push(last);
+  }
+  return selected;
+}
+
+function compactContext(state, turn, limit) {
   const runMessages = state.messages.filter(message => isCurrentRun(state, message));
   const agent = state.agents[turn.agent];
   const scope = agent && agent.contextScope || DEFAULT_CONTEXT_SCOPE;
+  const cap = limit === undefined ? contextLimitForAgent(agent) : limit;
 
-  if (scope === 'global') return compactMessages(runMessages.slice(-limit));
+  if (scope === 'global') return compactMessages(runMessages.slice(-cap));
 
+  // Agent scope is addressee-based: an agent must see what was sent to it, not only what it
+  // wrote. A node with `requires` additionally gets each required node's latest message, so a
+  // fan-in collector never loses a lane it was gated on.
   const sourceMessage = runMessages.find(message => message.id === turn.sourceMessageId) || null;
-  const ownMessageLimit = Math.max(0, limit - (sourceMessage ? 1 : 0));
-  const authoredMessages = runMessages
-    .filter(message => message.sender === turn.agent && (!sourceMessage || message.id !== sourceMessage.id));
-  const ownMessages = ownMessageLimit > 0 ? authoredMessages.slice(-ownMessageLimit) : [];
-  const selectedIds = new Set(ownMessages.map(message => message.id));
-  if (sourceMessage) selectedIds.add(sourceMessage.id);
+  const guaranteed = new Set();
+  if (sourceMessage) guaranteed.add(sourceMessage.id);
+  for (const message of requiredNodeMessages(state, turn, runMessages)) guaranteed.add(message.id);
+
+  const optional = runMessages.filter(message => (
+    !guaranteed.has(message.id)
+    && (message.sender === turn.agent || messageAddressesAgent(state, message, turn.agent))
+  ));
+
+  // Guaranteed messages are never dropped to satisfy the cap: losing a lane a node was gated on
+  // is worse than exceeding the budget. Only the optional fill is capped.
+  const remaining = Math.max(0, cap - guaranteed.size);
+  const selectedIds = new Set(guaranteed);
+  for (const message of remaining > 0 ? optional.slice(-remaining) : []) selectedIds.add(message.id);
 
   return compactMessages(runMessages.filter(message => selectedIds.has(message.id)));
 }
@@ -783,10 +905,20 @@ function workflowHints(state, turn) {
   };
 }
 
+function dispatchSettings(agent) {
+  const settings = {};
+  if (agent.model) settings.model = agent.model;
+  if (agent.subagentType) settings.subagentType = agent.subagentType;
+  if (Array.isArray(agent.tools)) settings.tools = agent.tools;
+  if (Number.isInteger(agent.contextLimit) && agent.contextLimit > 0) settings.contextLimit = agent.contextLimit;
+  return settings;
+}
+
 function buildAgentInstruction(state, turn) {
   const agent = state.agents[turn.agent];
   const systemPrompt = agent.systemPrompt;
   const context = compactContext(state, turn);
+  const ignoredMentions = Array.isArray(turn.ignoredMentions) ? turn.ignoredMentions : [];
   const routedFrom = messageById(state, turn.sourceMessageId);
   const workflow = workflowHints(state, turn);
   const handoff = handoffFilePair(`turn-${turn.id}`);
@@ -809,6 +941,7 @@ ${workflow.next.length > 0 ? workflow.next.map(item => `- ${item.node}: @${item.
 
 Routed-from message:
 ${routedFrom ? `from: ${routedFrom.sender}\nid: ${routedFrom.id}\n${routedFrom.content}` : '(missing)'}
+${ignoredMentions.length > 0 ? `\nOverridden mentions:\nThe workflow does not allow the human to enter at ${ignoredMentions.map(target => `@${target}`).join(', ')}, so routing came here instead. Tell the user their mention was overridden.\n` : ''}
 
 Conversation context:
 ${contextMarkdown(context)}
@@ -823,7 +956,10 @@ Now produce ONLY @${agent.name}'s next message. Do not explain the protocol. Do 
     agent: agent.name,
     role: agent.role,
     contextScope: agent.contextScope,
+    contextLimit: contextLimitForAgent(agent),
+    dispatch: dispatchSettings(agent),
     reason: turn.reason,
+    ignoredMentions,
     workflow,
     routedFrom: routedFrom ? {
       id: routedFrom.id,
@@ -929,7 +1065,34 @@ function nextInstruction(state) {
   const pendingAction = state.pendingHostActions.find(action => isCurrentRun(state, action) && action.status === 'pending');
   if (pendingAction) return buildHostActionInstruction(state, pendingAction);
 
-  const pendingTurn = state.pendingTurns.find(turn => isCurrentRun(state, turn) && turn.status === 'pending');
+  const pendingTurns = state.pendingTurns.filter(turn => isCurrentRun(state, turn) && turn.status === 'pending');
+
+  if (state.workflow.parallelDispatch && pendingTurns.length > 0 && !turnLimitReached(state)) {
+    const undispatched = pendingTurns.filter(turn => !turn.dispatched);
+    if (undispatched.length === 0) {
+      return {
+        type: 'idle',
+        world: state.world.name,
+        runId: state.currentRunId,
+        awaitingTurns: pendingTurns.map(turn => turn.id),
+        hostInstruction: 'Every pending Agent World turn has already been dispatched. Complete the outstanding turns before asking for more work.'
+      };
+    }
+    if (undispatched.length > 1) {
+      for (const turn of undispatched) turn.dispatched = true;
+      return {
+        type: 'agent_instruction_batch',
+        world: state.world.name,
+        runId: state.currentRunId,
+        turns: undispatched.map(turn => buildAgentInstruction(state, turn)),
+        hostInstruction: 'Dispatch every turn in this batch in parallel, one independent subagent per turn. Complete each turn through its own responseContract paths; completions may arrive in any order.'
+      };
+    }
+    undispatched[0].dispatched = true;
+    return buildAgentInstruction(state, undispatched[0]);
+  }
+
+  const pendingTurn = pendingTurns[0];
   if (pendingTurn && turnLimitReached(state)) {
     pendingTurn.status = 'blocked';
     pendingTurn.blockedAt = now();
@@ -959,6 +1122,7 @@ function completeTurn(state, turnId, content) {
   if (turn.status !== 'pending') throw new Error(`Turn is not pending: ${turnId}`);
   state.currentRunId = turn.runId;
   turn.status = 'completed';
+  turn.dispatched = false;
   turn.completedAt = now();
   state.completedTurns.push({ ...turn });
 
@@ -1037,18 +1201,23 @@ function requestContent(request) {
   return typeof value === 'string' ? value : JSON.stringify(value);
 }
 
+function instructionAndSave(state) {
+  // nextInstruction can mark batched turns dispatched, so build it before persisting.
+  const instruction = nextInstruction(state);
+  saveState(state);
+  return instruction;
+}
+
 function executeRouterCommand(config, cmd, args = {}, content = '') {
   if (cmd === 'reset') {
     if (fs.existsSync(activeStatePath)) fs.rmSync(activeStatePath, { force: true });
     const state = newState(config);
-    saveState(state);
-    return { type: 'reset', statePath: activeStatePath, configPath: config.configPath, next: nextInstruction(state) };
+    return { type: 'reset', statePath: activeStatePath, configPath: config.configPath, next: instructionAndSave(state) };
   }
 
   if (cmd === 'init') {
     const state = loadState(config);
-    saveState(state);
-    return { type: 'ready', statePath: activeStatePath, configPath: config.configPath, world: state.world.name, next: nextInstruction(state) };
+    return { type: 'ready', statePath: activeStatePath, configPath: config.configPath, world: state.world.name, next: instructionAndSave(state) };
   }
 
   const state = loadState(config);
@@ -1056,27 +1225,24 @@ function executeRouterCommand(config, cmd, args = {}, content = '') {
   if (cmd === 'user' || cmd === 'ingest') {
     if (!String(content).trim()) throw new Error('No user message provided.');
     ensureRunForUserMessage(state);
+    supersedePendingRoutingErrors(state);
     const msg = appendMessage(state, 'human', content);
     processMessageForRouting(state, msg);
-    saveState(state);
-    return nextInstruction(state);
+    return instructionAndSave(state);
   }
 
   if (cmd === 'next') {
-    saveState(state);
-    return nextInstruction(state);
+    return instructionAndSave(state);
   }
 
   if (cmd === 'complete') {
     if (args.turn) {
       completeTurn(state, args.turn, content);
-      saveState(state);
-      return nextInstruction(state);
+      return instructionAndSave(state);
     }
     if (args.action) {
       completeAction(state, args.action, content);
-      saveState(state);
-      return nextInstruction(state);
+      return instructionAndSave(state);
     }
     throw new Error('complete requires turnId/turn or actionId/action.');
   }
