@@ -18,6 +18,14 @@
   - Unresolved handoff mentions block instead of stalling the run silently.
   - A new human message supersedes a run's outstanding routing errors.
   - Stop-token detection ignores fenced code blocks.
+  - Edge enforcement is derived from workflow.type, not configured beside it; free-mention is the
+    one pattern with no graph, and a contradicting enforceEdges is a configuration error.
+  - free-mention worlds must declare no edges, no requires, and exactly one node per agent, so a
+    resolved mention can never queue no turn and report no block.
+  - allowedNextNodes is the single source for both mention resolution and the prompt's allowed-next
+    list, so a graph-less world offers its peers instead of rendering "(none)".
+  - An unresolved paragraph-start mention is checked before auto-mention, so it can no longer be
+    swallowed by a reply to the previous sender.
   - Human mentions overridden by the workflow entry are reported as ignoredMentions.
   - Agent-scope context is addressee-based and guarantees each requires node's latest message.
   - Added opt-in workflow.parallelDispatch batching plus per-agent subagent dispatch settings.
@@ -111,6 +119,30 @@ function normalizeAgents(parsed, configPath) {
   return agents;
 }
 
+const FREE_MENTION_TYPE = 'free-mention';
+
+// Canonical workflow pattern ids. The schema enum is the other copy; exported so a test can assert
+// the two never drift apart.
+const CANONICAL_WORKFLOW_TYPES = new Set([
+  'broadcast',
+  FREE_MENTION_TYPE,
+  'direct-handoff',
+  'multi-agent-fan-out',
+  'fan-in-collector',
+  'sequential-pipeline',
+  'intent-router',
+  'fsm-state-token',
+  'debate-ping-pong-loop',
+  'orchestrator-worker',
+  'custom-dag'
+]);
+
+// Edge enforcement is a property of the pattern, not a separate switch. free-mention is the one
+// pattern with no graph, so it is the one pattern that does not enforce edges.
+function enforcementForType(type) {
+  return type !== FREE_MENTION_TYPE;
+}
+
 const LEGACY_EDGE_HELP = 'Define workflow.nodes as an object keyed by node id and workflow.edges as an object mapping each source node id (or "human") to an array of target node ids. Express joins with a node-level "requires" array, not an edge-level "join" key.';
 
 function assertSupportedWorkflowShape(raw) {
@@ -146,10 +178,10 @@ function normalizeWorkflow(parsed, agents) {
   const raw = parsed.workflow || {};
   const routing = parsed.routing || {};
   const workflow = {
-    type: raw.type || 'Unspecified',
+    type: raw.type || null,
     entry: raw.entry || null,
     entryAgent: raw.entryAgent || routing.noMentionFromHumanGoesTo || parsed.world && parsed.world.entryAgent,
-    enforceEdges: raw.enforceEdges !== false,
+    enforceEdges: enforcementForType(raw.type),
     parallelDispatch: raw.parallelDispatch === true,
     nodes: {},
     edges: {}
@@ -167,12 +199,69 @@ function normalizeWorkflow(parsed, agents) {
   return workflow;
 }
 
+// loadConfig supplies `config.declaredEnforceEdges`. Calling this directly without it runs every
+// graph and free-mention shape rule but skips the enforcement-mismatch check.
 function validateConfig(config) {
   const errors = [];
   const agents = config.agents || {};
   const workflow = config.workflow || {};
   const nodes = workflow.nodes || {};
   const edges = workflow.edges || {};
+  const declaredEnforceEdges = config.declaredEnforceEdges;
+  const typeIsCanonical = CANONICAL_WORKFLOW_TYPES.has(workflow.type);
+
+  if (!typeIsCanonical) {
+    errors.push(`workflow.type must be one of the canonical workflow pattern ids, got ${workflow.type ? `"${workflow.type}"` : '(none)'}`);
+  }
+
+  // Enforcement is derived from the pattern. Stating it is allowed only when it agrees; a
+  // contradiction used to load and silently negate the pattern's own eval contract. Skipped when the
+  // type is unknown, so the message names the field the author must actually fix.
+  if (typeIsCanonical && declaredEnforceEdges !== undefined) {
+    const required = enforcementForType(workflow.type);
+    if (declaredEnforceEdges !== required) {
+      errors.push(`workflow.enforceEdges must be ${required} for workflow.type "${workflow.type}", or omitted; edge enforcement is derived from the pattern`);
+    }
+  }
+
+  // free-mention is defined by having no graph at all. Each shape below would otherwise let a
+  // resolved mention queue no turn and report no block.
+  if (workflow.type === FREE_MENTION_TYPE) {
+    for (const source of Object.keys(edges)) {
+      errors.push(`workflow.edges.${source} is not allowed in a free-mention world; workflow.edges must be {}`);
+    }
+
+    for (const [nodeId, node] of Object.entries(nodes)) {
+      if (node && asArray(node.requires).length > 0) {
+        errors.push(`workflow.nodes.${nodeId}.requires is not allowed in a free-mention world; there are no edges to order prerequisites against`);
+      }
+    }
+
+    const nodeCountByAgent = new Map();
+    for (const node of Object.values(nodes)) {
+      if (!node || !node.agent) continue;
+      nodeCountByAgent.set(node.agent, (nodeCountByAgent.get(node.agent) || 0) + 1);
+    }
+    for (const agentId of Object.keys(agents)) {
+      const count = nodeCountByAgent.get(agentId) || 0;
+      if (count === 0) {
+        errors.push(`agents.${agentId} has no workflow node; every agent in a free-mention world must map to exactly one node`);
+      } else if (count > 1) {
+        errors.push(`agents.${agentId} is referenced by ${count} workflow nodes; every agent in a free-mention world must map to exactly one node`);
+      }
+    }
+
+    if (Object.keys(agents).length < 2) {
+      errors.push('agents must contain at least two agents in a free-mention world; a lone agent has no peer to mention');
+    }
+
+    // turnLimitReached treats a non-finite or non-positive value as "no limit" in every pattern, but
+    // free-mention is the one with no graph to bound it, so it is guarded here.
+    const turnLimit = config.world && config.world.turnLimit;
+    if (!Number.isInteger(turnLimit) || turnLimit < 1) {
+      errors.push(`world.turnLimit must be an integer greater than 0 in a free-mention world; it is the only structural stop the pattern has, got ${JSON.stringify(turnLimit)}`);
+    }
+  }
 
   for (const [agentId, agent] of Object.entries(agents)) {
     if (!CONTEXT_SCOPES.has(agent.contextScope)) {
@@ -258,7 +347,9 @@ function loadConfig(configPath = DEFAULT_CONFIG_PATH) {
     configPath,
     world,
     workflow,
-    agents
+    agents,
+    // Carried here rather than on `workflow`, which hydrateState copies wholesale into the state file.
+    declaredEnforceEdges: parsed.workflow && parsed.workflow.enforceEdges
   });
 }
 
@@ -528,7 +619,7 @@ function extractHostActions(content, state, sender, metadata = {}) {
       id: actionId,
       type: 'host_action',
       runId: metadata.runId || currentRunId(state),
-      requestedBy: parsed.requestedBy || parsed.requested_by || sender,
+      requestedBy: sender,
       kind: parsed.kind || 'unknown',
       reason: parsed.reason || '',
       approval: parsed.approval || 'ask_if_risky',
@@ -584,12 +675,16 @@ function agentForNode(state, nodeId) {
 }
 
 function nodesForMentionTargets(state, sourceNode, mentions) {
-  if (!sourceNode || !state.workflow.nodes || !state.workflow.edges) return [];
-  const nextNodes = state.workflow.edges[sourceNode] || [];
-  return nextNodes.filter(nodeId => mentions.includes(agentForNode(state, nodeId)) && nodePrereqsMet(state, nodeId));
+  return allowedNextNodes(state, sourceNode)
+    .filter(nodeId => mentions.includes(agentForNode(state, nodeId)) && nodePrereqsMet(state, nodeId));
 }
 
+// With enforcement off there is no graph: every peer is reachable. A null source node excludes
+// nothing, which is what keeps a free-mention turn node-carrying even on a legacy null-node turn.
 function allowedNextNodes(state, sourceNode) {
+  if (state.workflow.enforceEdges === false) {
+    return Object.keys(state.workflow.nodes || {}).filter(nodeId => nodeId !== sourceNode);
+  }
   if (!sourceNode || !state.workflow.edges) return [];
   return state.workflow.edges[sourceNode] || [];
 }
@@ -684,8 +779,8 @@ function autoReplyMentionTarget(state, msg) {
   if (!state.agents[sourceMessage.sender]) return null;
 
   const currentNode = msg.metadata && msg.metadata.workflowNode;
-  if (!currentNode || state.workflow.enforceEdges === false) return sourceMessage.sender;
-  return nodesForMentionTargets(state, currentNode, [sourceMessage.sender]).length > 0
+  if (!currentNode && state.workflow.enforceEdges) return sourceMessage.sender;
+  return nodesForMentionTargets(state, currentNode || null, [sourceMessage.sender]).length > 0
     ? sourceMessage.sender
     : null;
 }
@@ -744,38 +839,49 @@ function processMessageForRouting(state, msg) {
   }
 
   if (isAgent) {
-    if (mentions.length === 0) {
+    const currentNode = msg.metadata && msg.metadata.workflowNode;
+    const allowedNext = allowedNextNodes(state, currentNode || null);
+
+    // Only a message that resolved no mention can block, so skip the body scan otherwise.
+    const unresolved = mentions.length === 0 ? extractUnresolvedMentions(msg.content, state) : [];
+
+    // Whether an unresolved paragraph-start mention will actually surface as a block. Auto-reply is
+    // suppressed only when it will: otherwise substituting the previous sender is still the right
+    // move, and suppressing it would strand the turn with neither a route nor an error. The
+    // enforced-world exception is that a turn carrying no workflow node has no allowed-next set to
+    // check, so it keeps auto-replying rather than stalling; see mention-routing-rules.md.
+    const blockWouldFire = unresolved.length > 0
+      && (!state.workflow.enforceEdges || (Boolean(currentNode) && allowedNext.length > 0));
+
+    if (mentions.length === 0 && !blockWouldFire) {
       const replyTarget = autoReplyMentionTarget(state, msg);
       if (replyTarget) mentions = [replyTarget];
     }
 
-    const currentNode = msg.metadata && msg.metadata.workflowNode;
-    const routedNodes = nodesForMentionTargets(state, currentNode, mentions);
+    const routedNodes = nodesForMentionTargets(state, currentNode || null, mentions);
     if (routedNodes.length > 0) {
-      for (const nodeId of routedNodes) queueWorkflowNode(state, nodeId, msg.id, 'workflow_edge');
+      const reason = state.workflow.enforceEdges ? 'workflow_edge' : 'agent_mention';
+      for (const nodeId of routedNodes) queueWorkflowNode(state, nodeId, msg.id, reason);
+      return;
+    }
+
+    // A handoff that names nobody must surface, not stall the run at idle. This check is independent
+    // of edge enforcement; only its allowed-next precondition is enforced-world-specific, which keeps
+    // an enforced terminal node returning idle exactly as before.
+    if (blockWouldFire) {
+      queueRoutingError(state, {
+        reason: `Agent @${msg.sender} used a paragraph-start mention of ${unresolved.map(token => `@${token}`).join(', ')}, which matches no agent in this world.`,
+        code: 'unknown_mention_target',
+        sourceMessageId: msg.id,
+        sourceAgent: msg.sender,
+        sourceNode: currentNode || null,
+        unresolvedMentions: unresolved,
+        allowedNext
+      });
       return;
     }
 
     if (state.workflow.enforceEdges && currentNode) {
-      const allowedNext = allowedNextNodes(state, currentNode);
-
-      // A handoff that names nobody must surface, not stall the run at idle.
-      if (mentions.length === 0 && allowedNext.length > 0) {
-        const unresolved = extractUnresolvedMentions(msg.content, state);
-        if (unresolved.length > 0) {
-          queueRoutingError(state, {
-            reason: `Agent @${msg.sender} used a paragraph-start mention of ${unresolved.map(token => `@${token}`).join(', ')}, which matches no agent in this world.`,
-            code: 'unknown_mention_target',
-            sourceMessageId: msg.id,
-            sourceAgent: msg.sender,
-            sourceNode: currentNode,
-            unresolvedMentions: unresolved,
-            allowedNext
-          });
-        }
-        return;
-      }
-
       const invalidMentions = mentions.filter(target => !allowedNext.some(nodeId => agentForNode(state, nodeId) === target));
       if (invalidMentions.length > 0) {
         const invalidTargets = invalidMentions.map(target => ({
@@ -893,7 +999,7 @@ function relativeCommandBase() {
 
 function workflowHints(state, turn) {
   const node = workflowNode(state, turn.workflowNode);
-  const nextNodes = turn.workflowNode && state.workflow.edges ? state.workflow.edges[turn.workflowNode] || [] : [];
+  const nextNodes = allowedNextNodes(state, turn.workflowNode || null);
   return {
     node: turn.workflowNode || null,
     next: nextNodes.map(nodeId => ({
@@ -1040,6 +1146,7 @@ function buildBlockedInstruction(state, blocked) {
     sourceAgent: blocked.sourceAgent || null,
     sourceNode: blocked.sourceNode || null,
     mentions: blocked.mentions || [],
+    unresolvedMentions: blocked.unresolvedMentions || [],
     targetNodes: blocked.targetNodes || [],
     allowedNext: blocked.allowedNext || [],
     limit: blocked.limit,
@@ -1399,6 +1506,7 @@ if (require.main === module) {
 }
 
 module.exports = {
+  CANONICAL_WORKFLOW_TYPES,
   loadConfig,
   validateConfig
 };

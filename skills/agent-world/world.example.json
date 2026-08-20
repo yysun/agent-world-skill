@@ -10,7 +10,6 @@
     "type": "sequential-pipeline",
     "entry": "requirements",
     "entryAgent": "pm",
-    "enforceEdges": true,
     "nodes": {
       "requirements": {
         "agent": "pm",

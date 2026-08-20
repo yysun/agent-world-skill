@@ -50,10 +50,11 @@
       "required": ["type", "entry", "entryAgent", "nodes", "edges"],
       "properties": {
         "type": {
-          "description": "Canonical workflow pattern id. Use custom-dag only for explicitly customized user-defined workflow graphs; it is not a default init option.",
+          "description": "Canonical workflow pattern id. free-mention is the graph-less pattern: agents route to any peer by mention and edge enforcement is off. Use custom-dag only for explicitly customized user-defined workflow graphs; it is not a default init option.",
           "type": "string",
           "enum": [
             "broadcast",
+            "free-mention",
             "direct-handoff",
             "multi-agent-fan-out",
             "fan-in-collector",
@@ -72,8 +73,8 @@
           "$ref": "#/$defs/id"
         },
         "enforceEdges": {
-          "type": "boolean",
-          "default": true
+          "description": "Derived from workflow.type: false for free-mention, true for every other pattern id. Optional, and may only be stated when it matches the derived value; a contradicting value is rejected as a configuration error.",
+          "type": "boolean"
         },
         "parallelDispatch": {
           "description": "When true, the router returns every independent pending turn together so the host can dispatch them to subagents in parallel.",

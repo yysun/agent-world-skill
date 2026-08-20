@@ -7,6 +7,7 @@
 
   Recent changes:
   - skillRoot now resolves into skills/agent-world/ after the skill-restructure move.
+  - free-mention replaces the removed enforceEdges:false fallback as the unenforced routing mode.
 */
 
 const assert = require('node:assert/strict');
@@ -50,7 +51,6 @@ function makeWorld(options = {}) {
       type: 'sequential-pipeline',
       entry: 'intake',
       entryAgent: 'pm',
-      enforceEdges: options.enforceEdges !== false,
       nodes: {
         intake: {
           agent: 'pm',
@@ -122,6 +122,45 @@ function makeWorld(options = {}) {
   };
 }
 
+function makeFreeMentionWorld(options = {}) {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'agent-world-free-mention-e2e-'));
+  const worldDir = path.join(dir, '.agent-world');
+  fs.mkdirSync(worldDir, { recursive: true });
+  writePromptFiles(worldDir, {
+    coordinator: 'You are @coordinator. End with <world>pass</world>.',
+    researcher: 'You are @researcher. End with <world>pass</world>.',
+    critic: 'You are @critic. End with <world>pass</world>.'
+  });
+  fs.writeFileSync(path.join(worldDir, 'world.json'), JSON.stringify({
+    world: {
+      id: 'free-mention-e2e',
+      name: 'free-mention-e2e',
+      stopToken: '<world>pass</world>',
+      turnLimit: options.turnLimit || 8
+    },
+    workflow: {
+      type: 'free-mention',
+      entry: 'coordinator',
+      entryAgent: 'coordinator',
+      nodes: {
+        coordinator: { agent: 'coordinator', instruction: 'Open the conversation.' },
+        researcher: { agent: 'researcher', instruction: 'Gather the prior art.' },
+        critic: { agent: 'critic', instruction: 'Challenge the proposal.' }
+      },
+      edges: {}
+    },
+    agents: {
+      coordinator: { role: 'controller', promptPath: 'prompts/coordinator.md', contextScope: 'global' },
+      researcher: { role: 'researcher', promptPath: 'prompts/researcher.md', contextScope: 'agent' },
+      critic: { role: 'critic', promptPath: 'prompts/critic.md', contextScope: 'agent' }
+    }
+  }, null, 2));
+  return {
+    cwd: dir,
+    statePath: path.join(dir, '.state', 'router-state.json')
+  };
+}
+
 function run(world, args, input = '') {
   const result = spawnSync(process.execPath, [router, ...args], {
     cwd: world.cwd,
@@ -136,6 +175,18 @@ function run(world, args, input = '') {
   assert.equal(result.status, 0, result.stderr || result.stdout);
   assert.doesNotThrow(() => JSON.parse(result.stdout), result.stdout);
   return JSON.parse(result.stdout);
+}
+
+// Config errors exit non-zero and print JSON on stderr, so they need their own runner.
+function runExpectingConfigError(world, args) {
+  const result = spawnSync(process.execPath, [router, ...args], {
+    cwd: world.cwd,
+    env: { ...process.env, AGENT_WORLD_STATE: world.statePath },
+    input: '',
+    encoding: 'utf8'
+  });
+  assert.notEqual(result.status, 0, 'expected a non-zero exit for an invalid config');
+  return result.stderr + result.stdout;
 }
 
 function startImplementation(world) {
@@ -466,17 +517,33 @@ test('e2e: join target waits when requires are not complete', () => {
   assert.equal(output.type, 'idle');
 });
 
-test('e2e: enforceEdges false allows fallback agent mention routing outside the DAG', () => {
-  const world = makeWorld({ enforceEdges: false });
+test('e2e: free-mention routes to any peer without an edge and still carries the node', () => {
+  const world = makeFreeMentionWorld();
 
   run(world, ['reset']);
   const start = run(world, ['user', '--stdin'], 'Start.');
-  const output = run(world, ['complete', '--turn', start.turnId, '--stdin'], '@Build Dev\nSkip design.');
+  const output = run(world, ['complete', '--turn', start.turnId, '--stdin'], '@critic\nSkip the research.');
 
   assert.equal(output.type, 'agent_instruction');
-  assert.equal(output.agent, 'Build Dev');
+  assert.equal(output.agent, 'critic');
   assert.equal(output.reason, 'agent_mention');
-  assert.equal(output.workflow.node, null);
+  assert.equal(output.workflow.node, 'critic');
+  assert.match(output.hostInstruction, /- coordinator: @coordinator/);
+  assert.match(output.hostInstruction, /- researcher: @researcher/);
+  assert.doesNotMatch(output.hostInstruction, /- critic: @critic/);
+  assert.match(output.hostInstruction, /Challenge the proposal\./);
+});
+
+test('e2e: a contradictory enforceEdges is rejected instead of running degraded', () => {
+  const world = makeWorld();
+  const configPath = path.join(world.cwd, '.agent-world', 'world.json');
+  const config = JSON.parse(fs.readFileSync(configPath, 'utf8'));
+  config.workflow.enforceEdges = false;
+  fs.writeFileSync(configPath, JSON.stringify(config));
+
+  const output = runExpectingConfigError(world, ['reset']);
+  assert.match(output, /workflow\.enforceEdges must be true/);
+  assert.match(output, /sequential-pipeline/);
 });
 
 test('e2e: configured stopToken completes the run and strips leading mentions', () => {

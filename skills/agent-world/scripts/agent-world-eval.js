@@ -10,6 +10,8 @@
   - Added contract checks for world.json, prompt files, graph references, and
     prompt protocol language.
   - Added markdown JSON routing-case parsing for .agent-world/world.eval.md.
+  - Dropped the local canonical pattern id list and its workflow.type check; the router now rejects
+    a non-canonical type at load time, which made that named check unreachable.
   - Added report writing under .agent-world/eval-runs.
 */
 
@@ -20,18 +22,6 @@ const path = require('node:path');
 
 const routerPath = path.join(__dirname, 'agent-world-router.js');
 const { loadConfig } = require(routerPath);
-const SUPPORTED_WORKFLOW_TYPES = new Set([
-  'broadcast',
-  'direct-handoff',
-  'multi-agent-fan-out',
-  'fan-in-collector',
-  'sequential-pipeline',
-  'intent-router',
-  'fsm-state-token',
-  'debate-ping-pong-loop',
-  'orchestrator-worker',
-  'custom-dag'
-]);
 
 function parseArgs(argv) {
   const out = { _: [] };
@@ -356,12 +346,6 @@ function validateWorldContract(checks, rawConfig, config, configPath) {
   addCheck(checks, 'config', 'workflow.entry exists', () => {
     if (!config.workflow.entry || !config.workflow.nodes[config.workflow.entry]) {
       throw new Error(`missing workflow entry node: ${config.workflow.entry || '(none)'}`);
-    }
-  });
-
-  addCheck(checks, 'config', 'workflow.type is a canonical workflow pattern id', () => {
-    if (!SUPPORTED_WORKFLOW_TYPES.has(config.workflow.type)) {
-      throw new Error(`workflow.type must be one of the supported canonical workflow pattern ids, got ${config.workflow.type || '(none)'}`);
     }
   });
 

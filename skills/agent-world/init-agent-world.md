@@ -8,15 +8,15 @@ Creation is host setup. Do not start the router loop until `.agent-world/world.j
 
 1. Resolve `.agent-world/world.json` under the current working directory. Create `.agent-world/` and `.agent-world/prompts/` if needed.
 2. If `.agent-world/world.json` already exists, ask the user whether to recreate and overwrite the generated world bundle. Do not write unless they explicitly confirm.
-3. On first create or confirmed recreate, require exactly one workflow pattern before writing. The default choices are the nine canonical ids under "Workflow Patterns" below. `custom-dag` is not a tenth default pattern; it is only for a customized user-defined workflow, and is valid only when the user explicitly asks for a custom workflow or provides a custom graph. Do not infer, default, rename, group, shorten, or create `.agent-world/world.json` until the user chooses one exact supported pattern.
+3. On first create or confirmed recreate, require exactly one workflow pattern before writing. The default choices are the ten canonical ids under "Workflow Patterns" below. `custom-dag` is not one of them; it is only for a customized user-defined workflow, and is valid only when the user explicitly asks for a custom workflow or provides a custom graph. Do not infer, default, rename, group, shorten, or create `.agent-world/world.json` until the user chooses one exact supported pattern.
 4. If the user did not already name exactly one pattern, ask them to choose using a structured ask-user-input, user-input, or human-in-the-loop tool.
    - Use a tool that can show all workflow patterns as selectable options.
    - Include every pattern listed below.
    - Include short descriptions when the tool supports descriptions.
-   - Do not present fewer than nine options.
+   - Do not present fewer than ten options.
    - Do not replace the patterns with generic presets such as `Single-Agent Loop`, `Planner -> Executor`, `Planner -> Executor -> Reviewer`, `Specialist Router`, or `Custom`.
    - Do not include `custom-dag` unless the user explicitly asks for a customized workflow or provides a custom graph.
-   - If a tool is limited to fewer than nine options, it is not suitable for this choice.
+   - If a tool is limited to fewer than ten options, it is not suitable for this choice.
    - Do not use plain chat if a suitable structured user-input or human-in-the-loop tool is available.
    - If no available tool can show all options, ask in chat and list every pattern.
 5. On confirmed recreate, delete the existing `.agent-world/prompts/` directory before writing the new generated prompt files. This prevents stale prompt files from surviving after agents are renamed, removed, or replaced. Do not delete unrelated files under `.agent-world/`, such as request/result handoff files, state files, registry files, or user-owned notes.
@@ -42,7 +42,6 @@ Creation is host setup. Do not start the router loop until `.agent-world/world.j
        "type": "broadcast",
        "entry": "broadcaster",
        "entryAgent": "broadcaster",
-       "enforceEdges": true,
        "nodes": {
          "broadcaster": {
            "agent": "broadcaster",
@@ -75,7 +74,7 @@ Creation is host setup. Do not start the router loop until `.agent-world/world.j
    }
    ```
 
-11. Use the canonical object shape from `world.schema.json` and `world.example.json`:
+11. Use the canonical object shape from `world.schema.json` and `world.example.json`. Copy their structure and field names, never a field this document tells you not to write, such as `workflow.enforceEdges`:
    - `agents` is an object keyed by agent id, not an array.
    - `workflow.nodes` is an object keyed by workflow node id, not an array.
    - `workflow.edges` is an object whose keys are source node ids or `human`, and whose values are arrays of target node ids.
@@ -86,12 +85,13 @@ Creation is host setup. Do not start the router loop until `.agent-world/world.j
    - Workflow node objects may contain only `agent`, `instruction`, and `requires`.
    - Do not add semantic fields such as `type`, `kind`, `mode`, `join`, `state`, or `role` inside workflow nodes.
 12. Set `workflow.type` to the canonical kebab-case pattern id from "Workflow Patterns", such as `broadcast` or `sequential-pipeline`. Use `custom-dag` only for a customized user-defined workflow when the user explicitly asked for custom routing/workflow design or provided a custom graph. Do not write display labels such as `Broadcast`, `Sequential pipeline`, or implementation labels such as `dag` or `mention_graph` into generated worlds.
-13. Prefer `workflow.enforceEdges: true`. For loop-shaped patterns, keep `turnLimit` conservative and make the stop condition explicit in prompts.
+13. Do not write `workflow.enforceEdges` at all. Edge enforcement is derived from `workflow.type` (off for `free-mention`, on for every other id), and a value contradicting the pattern is rejected at load time. For loop-shaped patterns, keep `turnLimit` conservative and make the stop condition explicit in prompts.
 14. Agent entries in `world.json` must use `promptPath`, not inline prompt text, and must explicitly set `contextScope` from the selected pattern's required defaults below. Agents may optionally set `contextLimit`, `model`, `subagentType`, and `tools` to control how the host dispatches that agent's subagent; omit them unless the user asked for specific dispatch settings. Set `workflow.parallelDispatch` to `true` only for patterns with genuine independent lanes (`multi-agent-fan-out`, `fan-in-collector`, `broadcast`, `orchestrator-worker`). Do not omit it from generated agents. Do not include `"$schema": "./world.schema.json"` in generated worlds unless a specific host/client owns that schema reference strategy.
-15. Agent prompts must tell agents to use paragraph-start `@mentions`, stay inside the workflow, never run tools directly, request host work with an `agent-world-host-action` JSON block, and end final responses with `<world>pass</world>`.
-16. After writing `world.json`, validate it against `world.schema.json` before reporting success. If validation fails, fix `world.json` and rerun validation.
-17. After schema validation passes, run the deterministic eval script against the generated `world.json` and `world.eval.md`. If eval fails, fix the generated bundle and rerun eval before reporting success.
-18. Report the created path, selected pattern, generated eval contract path, schema validation result, and eval result. Do not run the router unless the user also asked to start using the world.
+15. For `free-mention` worlds specifically: set `workflow.edges` to `{}`, give every agent exactly one workflow node, declare no `requires`, and set `turnLimit` to 8. `parallelDispatch` follows rule 14, which already excludes this pattern. Every node counts as final, so every generated prompt must carry the stop token. Prompts must tell each agent to either hand off with exactly one paragraph-start peer mention **or** end with the stop token, never both in one message - the completion tag is checked before mentions are read, so a message carrying both ends the run without routing. Prompts must also tell agents to address the user by ending with the stop token, never by mentioning a non-agent such as `@human` or `@user`, which resolves to nothing and blocks the run.
+16. Agent prompts must tell agents to use paragraph-start `@mentions`, stay inside the workflow, never run tools directly, request host work with an `agent-world-host-action` JSON block, and end final responses with `<world>pass</world>`.
+17. After writing `world.json`, validate it against `world.schema.json` before reporting success. If validation fails, fix `world.json` and rerun validation.
+18. After schema validation passes, run the deterministic eval script against the generated `world.json` and `world.eval.md`. If eval fails, fix the generated bundle and rerun eval before reporting success.
+19. Report the created path, selected pattern, generated eval contract path, schema validation result, and eval result. Do not run the router unless the user also asked to start using the world.
 
 ## Workflow Patterns
 
@@ -104,6 +104,7 @@ Creation is host setup. Do not start the router loop until `.agent-world/world.j
 - `fsm-state-token` - FSM / state-token workflow: agents carry state tokens such as `[STATE=PLAN]` and route by state.
 - `debate-ping-pong-loop` - Debate / ping-pong loop: two agents alternate with explicit mentions until a stop condition.
 - `orchestrator-worker` - Orchestrator-worker: a controller delegates to workers, then a synthesizer merges results.
+- `free-mention` - Free mention: no workflow graph at all; any agent may hand off to any peer with a paragraph-start mention, and `world.turnLimit` is the only structural stop.
 
 ## Explicit Custom Pattern
 
@@ -120,11 +121,12 @@ Creation is host setup. Do not start the router loop until `.agent-world/world.j
 - `fsm-state-token`: create `state_router`, `planner`, `executor`, and `reviewer`; prompts carry `[STATE=...]` tokens.
 - `debate-ping-pong-loop`: create `pro`, `con`, and `judge`; allow bounded alternation; judge synthesizes and stops.
 - `orchestrator-worker`: create `orchestrator`, `worker_a`, `worker_b`, and `synthesizer`; orchestrator delegates; synthesizer merges.
+- `free-mention`: create `coordinator`, `researcher`, and `critic`; one node per agent; `workflow.edges` is `{}`; no `requires`; entry is `coordinator`.
 - `custom-dag`: derive agents, nodes, edges, and `requires` from the user's customized workflow or provided graph. Keep every node schema-valid.
 
 ## Required Context Scope Defaults
 
-Every generated agent for the nine out-of-box patterns must use the exact assignment below. `agent` gives a specialist its own current-run messages plus the current inbound message. `global` is reserved for roles that must merge branches or retain shared workflow state. For an explicit `custom-dag`, use `global` for collectors, joins, judges, final synthesizers, and stateful controllers; use `agent` for isolated workers and sequential specialists.
+Every generated agent for the ten out-of-box patterns must use the exact assignment below. `agent` gives a specialist its own current-run messages plus the current inbound message. `global` is reserved for roles that must merge branches or retain shared workflow state. For an explicit `custom-dag`, use `global` for collectors, joins, judges, final synthesizers, and stateful controllers; use `agent` for isolated workers and sequential specialists.
 
 <!-- context-scope-defaults:start -->
 ```json
@@ -180,6 +182,11 @@ Every generated agent for the nine out-of-box patterns must use the exact assign
     "worker_a": "agent",
     "worker_b": "agent",
     "synthesizer": "global"
+  },
+  "free-mention": {
+    "coordinator": "global",
+    "researcher": "agent",
+    "critic": "agent"
   }
 }
 ```
@@ -195,7 +202,8 @@ Every generated agent for the nine out-of-box patterns must use the exact assign
 - nodes with `requires` reference existing workflow nodes
 - every agent has a `promptPath` pointing to an existing Markdown prompt file
 - every generated agent explicitly sets `contextScope` to `agent` or `global` using the selected pattern's required defaults
-- final nodes tell the agent to end with `<world>pass</world>`
+- final nodes tell the agent to end with `<world>pass</world>`; in a `free-mention` world every node is final, so every prompt carries the stop token
+- a `free-mention` world sets `workflow.edges` to `{}`, declares no node `requires`, and maps every agent to exactly one node; edge and prerequisite requirements above apply to the enforced patterns only
 - `agents`, `workflow.nodes`, and `workflow.edges` are keyed objects, not arrays
 - workflow nodes contain only `agent`, `instruction`, and `requires`; never add node-level `type`, `kind`, `mode`, `join`, `state`, or `role`
 
@@ -226,4 +234,5 @@ Minimum deterministic routing coverage by selected pattern:
 | `fsm-state-token` | State token routes to the correct next node. |
 | `debate-ping-pong-loop` | Pro/con alternate; judge can stop; turn limit blocks runaway routing. |
 | `orchestrator-worker` | Orchestrator delegates; synthesizer merges after workers. |
+| `free-mention` | Any agent routes to any peer with no edge; an unresolved mention blocks; the turn limit bounds a non-terminating exchange. |
 | `custom-dag` | Customized workflow graph entry, edges, required joins, invalid handoffs, and stop-token completion. |

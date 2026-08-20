@@ -38,7 +38,7 @@ The deterministic eval confirms:
 - prompt file existence
 - prompt protocol requirements
 - router transitions
-- blocked invalid handoffs
+- blocked invalid handoffs, which for `free-mention` means an unresolved mention rather than an off-edge one
 - stop-token completion
 
 The deterministic eval must not call a live model. It uses mock completions from `.agent-world/world.eval.md` to test router behavior.
@@ -108,6 +108,7 @@ The generated routing cases should follow the selected canonical workflow patter
 | `fsm-state-token` | State token routes to the correct next node. |
 | `debate-ping-pong-loop` | Pro/con alternate; judge can stop; turn limit blocks runaway routing. |
 | `orchestrator-worker` | Orchestrator delegates; synthesizer merges after workers. |
+| `free-mention` | Any agent routes to any peer with no edge; an unresolved mention blocks; the turn limit bounds a non-terminating exchange. |
 | `custom-dag` | Customized workflow graph entry, edges, required joins, invalid handoffs, and stop-token completion. |
 
 ## Semantic Smoke Tests

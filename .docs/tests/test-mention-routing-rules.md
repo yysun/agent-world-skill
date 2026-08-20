@@ -41,7 +41,7 @@ The executable E2E suite must cover at least 20 router CLI cases. Each case crea
 - Unknown human paragraph mentions fall back to workflow entry.
 - `<world>TO:a,b</world>` ignores invalid targets but blocks valid off-edge targets.
 - Join targets wait when `requires` are incomplete.
-- `enforceEdges: false` permits fallback agent mention routing outside the DAG.
+- `free-mention` permits agent mention routing to any peer with no declared edge, and the routed turn still carries the target's workflow node.
 - Custom `world.stopToken` completes the run.
 - Auto-reply routes only when a return edge allows it.
 - `<world>STOP</world>` suppresses mention routing.

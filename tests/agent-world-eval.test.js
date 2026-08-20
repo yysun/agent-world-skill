@@ -5,6 +5,7 @@
   - Exercises the deterministic eval harness against temporary generated worlds.
   - Covers passing routing contracts and failed expected-result reporting.
   - Uses explicit built-in agent context scopes in generated eval fixtures.
+  - Covers a free-mention world's graph-less deterministic routing contract.
   - skillRoot now resolves into skills/agent-world/ after the skill-restructure move.
 */
 
@@ -252,4 +253,100 @@ test('eval runner fails when expected routing output does not match', () => {
   const latest = fs.readFileSync(path.join(world.outDir, 'latest.md'), 'utf8');
   assert.match(latest, /Result: FAIL/);
   assert.match(latest, /FAIL wrong expected agent fails: expected agent final/);
+});
+
+function makeFreeMentionEvalWorld(evalMarkdown) {
+  const cwd = fs.mkdtempSync(path.join(os.tmpdir(), 'agent-world-eval-free-mention-'));
+  const worldDir = path.join(cwd, '.agent-world');
+  const configPath = path.join(worldDir, 'world.json');
+  const evalPath = path.join(worldDir, 'world.eval.md');
+  const promptsDir = path.join(worldDir, 'prompts');
+  fs.mkdirSync(promptsDir, { recursive: true });
+  // Every node is final under empty edges, so every prompt carries the stop token.
+  for (const id of ['coordinator', 'researcher', 'critic']) {
+    fs.writeFileSync(path.join(promptsDir, `${id}.md`), [
+      `You are @${id}.`,
+      'Use paragraph-start @mentions for handoffs, to exactly one peer.',
+      'Do not execute tools.',
+      'Either hand off or end with <world>pass</world>, never both in one message.'
+    ].join('\n'));
+  }
+  writeJson(configPath, {
+    world: {
+      id: 'free-mention-eval',
+      name: 'free-mention-eval',
+      stopToken: '<world>pass</world>',
+      turnLimit: 8,
+      mode: 'host_delegated'
+    },
+    workflow: {
+      type: 'free-mention',
+      entry: 'coordinator',
+      entryAgent: 'coordinator',
+      parallelDispatch: false,
+      nodes: {
+        coordinator: { agent: 'coordinator', instruction: 'Open the conversation.' },
+        researcher: { agent: 'researcher', instruction: 'Gather the prior art.' },
+        critic: { agent: 'critic', instruction: 'Challenge the proposal.' }
+      },
+      edges: {}
+    },
+    agents: {
+      coordinator: { role: 'coordinator', promptPath: 'prompts/coordinator.md', contextScope: 'global' },
+      researcher: { role: 'researcher', promptPath: 'prompts/researcher.md', contextScope: 'agent' },
+      critic: { role: 'critic', promptPath: 'prompts/critic.md', contextScope: 'agent' }
+    }
+  });
+  fs.writeFileSync(evalPath, evalMarkdown);
+  return { cwd, configPath, evalPath, outDir: path.join(worldDir, 'eval-runs') };
+}
+
+test('eval runner accepts a free-mention world and its graph-less routing contract', () => {
+  const world = makeFreeMentionEvalWorld(`# Agent World Eval
+
+## Routing Cases
+
+\`\`\`json
+{
+  "name": "any agent routes to any peer with no edge",
+  "given": [
+    { "command": "user", "content": "Start the conversation" }
+  ],
+  "complete": {
+    "agent": "coordinator",
+    "content": "@critic\\nTake a look."
+  },
+  "expect": {
+    "type": "agent_instruction",
+    "agent": "critic",
+    "workflowNode": "critic"
+  }
+}
+\`\`\`
+
+\`\`\`json
+{
+  "name": "an unresolved mention blocks",
+  "given": [
+    { "command": "user", "content": "Start the conversation" }
+  ],
+  "complete": {
+    "agent": "coordinator",
+    "content": "@architekt\\nPlease review."
+  },
+  "expect": {
+    "type": "blocked",
+    "code": "unknown_mention_target"
+  }
+}
+\`\`\`
+`);
+
+  const result = runEval(world);
+  assert.equal(result.status, 0, result.stderr || result.stdout);
+  const report = fs.readFileSync(path.join(world.outDir, 'latest.md'), 'utf8');
+  assert.match(report, /any agent routes to any peer with no edge/);
+  assert.match(report, /an unresolved mention blocks/);
+  assert.doesNotMatch(report, /workflow\.type is a canonical workflow pattern id/);
+  assert.doesNotMatch(report, /FAIL/);
 });

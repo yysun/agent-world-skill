@@ -171,12 +171,14 @@ Mentions still have to fit the workflow:
 
 - A human message with no paragraph-beginning mention enters `workflow.entry`, unless `world.mainAgent` is configured.
 - If `world.mainAgent` is configured, a human no-mention message is treated like an implicit mention of that agent.
-- If `workflow.edges.human` is configured, human mentions can only enter listed nodes.
-- Agent-authored mentions route only across allowed `workflow.edges` from the current node.
-- Nodes with `requires` do not run until their prerequisites are complete.
-- With `workflow.enforceEdges: true`, an off-edge mention returns `blocked` instead of falling back to another agent.
-- With `workflow.enforceEdges: false`, off-DAG agent mentions may fall back to direct agent routing.
-- A paragraph-start mention naming no configured agent returns `blocked` with `unknown_mention_target` rather than letting the run stall silently.
+- In the edge-enforced patterns (every id except `free-mention`):
+  - If `workflow.edges.human` is configured, human mentions can only enter listed nodes.
+  - Agent-authored mentions route only across allowed `workflow.edges` from the current node.
+  - Nodes with `requires` do not run until their prerequisites are complete.
+  - An off-edge mention returns `blocked` instead of falling back to another agent.
+- In `free-mention`, any agent may hand off to any peer with no edge, and the routed turn still carries the target's workflow node. A `free-mention` world must declare `workflow.edges` as `{}`, no node `requires`, exactly one node per agent, and at least two agents; anything else is rejected at load time.
+- Edge enforcement is derived from `workflow.type`, never configured beside it. `workflow.enforceEdges` is optional and may only be stated when it matches the value the pattern implies; a contradicting value is a configuration error. A `workflow.type` that is absent or is not a canonical pattern id is also rejected.
+- A paragraph-start mention naming no configured agent returns `blocked` with `unknown_mention_target` rather than letting the run stall silently. This is checked before auto-mention, so an unresolved mention is never quietly replaced by a reply to the previous sender. In an edge-enforced world the node must also have outgoing edges, so a terminal node still goes idle. A few message shapes still end at idle rather than blocking, because they leave no unresolved token to detect: a prose reply with no mention and no stop token from an agent with no auto-reply target, and a `<world>TO:...</world>` tag naming only unresolvable targets. See `skills/agent-world/mention-routing-rules.md` for the full list.
 
 World tags refine routing:
 
@@ -197,9 +199,9 @@ The router owns all of this. Agents should mention the intended next target, but
 
    Short command forms such as `agent-world: init` and `agent-world init` mean the same thing. They are not tool calls.
 
-   Codex should ask which messaging workflow you want using a user-input or human-in-the-loop tool that can show all nine default workflow pattern ids. If no suitable tool is available, it should ask in chat and list every default id with its display label. It must not compress, rename, replace, or add workflow choices. `custom-dag` is not a tenth default pattern; it is only for a customized user-defined workflow, and is valid only when you explicitly ask for custom routing/workflow design or provide a custom graph. After you choose, it writes `.agent-world/world.json`, `.agent-world/world.eval.md`, and `.agent-world/prompts/*.md` with sample agents and a matching workflow.
+   Codex should ask which messaging workflow you want using a user-input or human-in-the-loop tool that can show all ten default workflow pattern ids. If no suitable tool is available, it should ask in chat and list every default id with its display label. It must not compress, rename, replace, or add workflow choices. `custom-dag` is not one of the defaults; it is only for a customized user-defined workflow, and is valid only when you explicitly ask for custom routing/workflow design or provide a custom graph. After you choose, it writes `.agent-world/world.json`, `.agent-world/world.eval.md`, and `.agent-world/prompts/*.md` with sample agents and a matching workflow.
 
-   If `.agent-world/world.json` already exists, Codex must ask whether to recreate and overwrite it. If recreating, Codex must ask for the workflow again from the nine default ids, or `custom-dag` when a customized workflow is explicitly requested.
+   If `.agent-world/world.json` already exists, Codex must ask whether to recreate and overwrite it. If recreating, Codex must ask for the workflow again from the ten default ids, or `custom-dag` when a customized workflow is explicitly requested.
 
 3. Ask the agent app for the work you want:
 
@@ -229,6 +231,7 @@ The init process:
    - `fsm-state-token` - FSM / state-token workflow
    - `debate-ping-pong-loop` - Debate / ping-pong loop
    - `orchestrator-worker` - Orchestrator-worker
+   - `free-mention` - Free mention (no graph; any agent routes to any peer)
    If the user has not already named one of these ids, creation stops here until they choose. Agent World should not infer or default the workflow type. `custom-dag` is not a default choice; it is allowed only when the user explicitly asks for custom routing/workflow design or provides a custom graph.
 4. On confirmed recreate, removes the old `.agent-world/prompts/` directory before writing new generated prompt files, while leaving unrelated `.agent-world/` files alone.
 5. Writes a valid `.agent-world/world.json` with `workflow.type` set to the selected canonical pattern id, sample agents, prompt paths, explicit role-appropriate `contextScope` values, keyed workflow nodes, keyed edges, and stop behavior for the selected pattern, plus `.agent-world/world.eval.md` and matching `.agent-world/prompts/*.md` files.

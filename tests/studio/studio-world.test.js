@@ -320,3 +320,22 @@ test('concurrent validations do not clobber each other', async () => {
     assert.deepEqual(leftovers, []);
   });
 });
+
+test('a contradictory enforceEdges is reported through the router rules, with no Studio-specific code', async () => {
+  const project = makeProject();
+  await withStudio(project, async ({ handle, cookie }) => {
+    const world = defaultWorld();
+    world.workflow.enforceEdges = false;
+    const res = await fetch(`${handle.origin}/api/validate`, {
+      method: 'POST',
+      headers: { Cookie: cookie, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ world })
+    });
+    const body = await res.json();
+    assert.equal(body.valid, false);
+    assert.ok(
+      body.errors.some(e => e.message.includes('workflow.enforceEdges')),
+      JSON.stringify(body.errors)
+    );
+  });
+});

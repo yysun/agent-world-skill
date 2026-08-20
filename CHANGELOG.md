@@ -9,6 +9,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- `free-mention` workflow pattern: a tenth default init option with no workflow graph at all. Any
+  agent hands off to any peer with a paragraph-start mention, the routed turn still carries the
+  target's workflow node, and `world.turnLimit` is the only structural stop. Its turn prompts list
+  the world's other agents as allowed targets instead of an edge list it does not use.
+- `unresolvedMentions` on a `blocked` result, which `queueRoutingError` already stored and `SKILL.md`
+  already promised the host would receive.
 - Subagent dispatch contract: `agent_instruction` now carries `dispatch` (`model`, `subagentType`,
   `tools`, `contextLimit`) and `SKILL.md` directs the host to run each turn in an independent
   subagent instead of role-playing it inline.
@@ -32,6 +38,30 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **Breaking:** edge enforcement is derived from `workflow.type` instead of configured beside it.
+  `workflow.enforceEdges` stays optional but may only be stated when it matches the value the pattern
+  implies; a contradicting value is now a configuration error. Previously
+  `{"type": "sequential-pipeline", "enforceEdges": false}` loaded happily and silently negated the
+  pattern's own eval contract, while leaving the router unable to route at all.
+- **Breaking:** a `workflow.type` that is absent or is not a canonical pattern id is rejected at load
+  time, so enforcement is never derived from an unvalidated default.
+- **Breaking:** an unresolved paragraph-start mention is now checked before the router's auto-reply
+  step, so it blocks instead of being silently replaced by a reply to the previous sender. An
+  edge-enforced turn carrying no workflow node is the one documented exception. An edge-enforced
+  terminal node still goes idle, as before.
+- A `free-mention` world is rejected at load time if it declares any workflow edge, any node
+  `requires`, an agent with no workflow node, an agent referenced by more than one node, or fewer
+  than two agents. Each of these would otherwise let a resolved mention queue no turn and report no
+  block.
+- `requestedBy` on a host action is now always the emitting agent. An agent-supplied peer name
+  paired the host result with the acting turn's workflow node, so the resumed turn's agent and node
+  disagreed.
+- A `free-mention` world that declares `world.turnLimit` must declare a positive integer. A
+  malformed value previously disabled the limit entirely, and it is the only structural stop the
+  pattern has. Omitting the field still falls back to the default of 30, so generated worlds set it
+  explicitly.
+- The deterministic eval script no longer keeps its own copy of the canonical pattern id list, or the
+  `workflow.type` check that became unreachable once the router validates the type at load time.
 - **Breaking:** the router rejects the legacy `workflow.edges` array dialect and edge-level `join`
   keys, and requires `workflow.nodes`. These were already invalid under `world.schema.json` and made
   the router synthesize workflow node ids that appeared in no file. Use object-form edges and

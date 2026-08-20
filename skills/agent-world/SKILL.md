@@ -63,7 +63,7 @@ When the user asks to create, initialize, init, scaffold, or set up an Agent Wor
 
 Treat shorthand command forms such as `agent-world: init`, `agent-world init`, `agent-world:init`, `agent world init`, and `init agent-world` as init requests. These are not requests to call an `init` tool or function. Do not report `unknown_tool` for these forms.
 
-Before doing any init work, load and follow the skill-relative reference file `init-agent-world.md`. Resolve it relative to the directory containing this `SKILL.md`, not relative to the user's project cwd. That file is the source of truth for creating `.agent-world/world.json`, handling recreate/overwrite confirmation, selecting exactly one of the nine default workflow pattern ids, or explicit `custom-dag` only for a customized user-defined workflow, using the canonical skill-relative `world.schema.json` shape, and generating prompt files under `.agent-world/prompts/`.
+Before doing any init work, load and follow the skill-relative reference file `init-agent-world.md`. Resolve it relative to the directory containing this `SKILL.md`, not relative to the user's project cwd. That file is the source of truth for creating `.agent-world/world.json`, handling recreate/overwrite confirmation, selecting exactly one of the ten default workflow pattern ids, or explicit `custom-dag` only for a customized user-defined workflow, using the canonical skill-relative `world.schema.json` shape, and generating prompt files under `.agent-world/prompts/`.
 
 If `init-agent-world.md` cannot be read, stop and report that the Agent World skill installation is incomplete. Do not invent fallback workflow options, do not use generic presets, and do not create or overwrite `.agent-world/world.json`.
 
@@ -80,7 +80,7 @@ The deterministic eval confirms:
 - prompt file existence
 - prompt protocol requirements
 - router transitions
-- blocked invalid handoffs
+- blocked invalid handoffs, which for `free-mention` means an unresolved mention rather than an off-edge one
 - stop-token completion
 
 Live semantic smoke tests are optional and must be reported separately from deterministic eval results.

@@ -12,6 +12,7 @@
   - Covers longest-match mention resolution, unknown-mention blocks, and block recovery.
   - Covers fenced stop tokens, ignoredMentions, addressee-based agent context, and contextLimit.
   - Covers subagent dispatch passthrough, parallelDispatch batching, and the rejected legacy dialect.
+  - Covers the free-mention pattern, type-derived edge enforcement, and its config shape rules.
 */
 
 const assert = require('node:assert/strict');
@@ -363,7 +364,7 @@ test('config validation: rejects an unsupported agent contextScope', () => {
   }, /agents\.pm\.contextScope must be one of: global, agent/);
 });
 
-test('generation policy: all nine built-in patterns assign valid context scopes to every sample agent', () => {
+test('generation policy: all ten built-in patterns assign valid context scopes to every sample agent', () => {
   const initReference = fs.readFileSync(path.join(skillRoot, 'init-agent-world.md'), 'utf8');
   const match = initReference.match(/<!-- context-scope-defaults:start -->\s*```json\s*([\s\S]*?)```\s*<!-- context-scope-defaults:end -->/);
   assert.ok(match, 'missing machine-checkable context scope defaults');
@@ -377,7 +378,8 @@ test('generation policy: all nine built-in patterns assign valid context scopes 
     'intent-router': { router: 'agent', docs: 'agent', code: 'agent', ops: 'agent' },
     'fsm-state-token': { state_router: 'global', planner: 'agent', executor: 'agent', reviewer: 'global' },
     'debate-ping-pong-loop': { pro: 'agent', con: 'agent', judge: 'global' },
-    'orchestrator-worker': { orchestrator: 'global', worker_a: 'agent', worker_b: 'agent', synthesizer: 'global' }
+    'orchestrator-worker': { orchestrator: 'global', worker_a: 'agent', worker_b: 'agent', synthesizer: 'global' },
+    'free-mention': { coordinator: 'global', researcher: 'agent', critic: 'agent' }
   };
 
   assert.deepEqual(defaults, expectedDefaults);
@@ -1196,4 +1198,441 @@ test('config validation: rejects a non-positive contextLimit', () => {
 
   assert.notEqual(result.status, 0);
   assert.match(result.stderr, /agents\.qa\.contextLimit must be an integer greater than 0/);
+});
+
+// --- free-mention pattern -------------------------------------------------------------------
+
+function makeFreeMentionWorld(options = {}) {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'agent-world-free-mention-test-'));
+  const worldDir = path.join(dir, '.agent-world');
+  const configPath = path.join(worldDir, 'world.json');
+  fs.mkdirSync(worldDir, { recursive: true });
+  const agentIds = options.agentIds || ['coordinator', 'researcher', 'critic'];
+  writePromptFiles(worldDir, Object.fromEntries(
+    agentIds.map(id => [id, `You are @${id}. End with <world>pass</world>.`])
+  ));
+  const nodes = options.nodes || Object.fromEntries(
+    agentIds.map(id => [id, { agent: id, instruction: `${id} instruction.` }])
+  );
+  writeWorldJson(configPath, {
+    world: {
+      id: 'free-mention-test',
+      name: 'free-mention-test',
+      stopToken: '<world>pass</world>',
+      turnLimit: options.turnLimit || 8
+    },
+    workflow: {
+      ...(options.omitType ? {} : { type: options.type || 'free-mention' }),
+      entry: 'coordinator',
+      entryAgent: 'coordinator',
+      ...(options.enforceEdges === undefined ? {} : { enforceEdges: options.enforceEdges }),
+      nodes,
+      edges: options.edges || {}
+    },
+    agents: Object.fromEntries(agentIds.map(id => [id, {
+      role: id,
+      promptPath: `prompts/${id}.md`,
+      contextScope: id === 'coordinator' ? 'global' : 'agent'
+    }]))
+  });
+  return { cwd: dir, configPath, statePath: path.join(dir, '.state', 'router-state.json') };
+}
+
+function assertFreeMentionConfigRejected(options, expectedMessage) {
+  const world = makeFreeMentionWorld(options);
+  const result = runRaw(world, ['reset']);
+  assert.notEqual(result.status, 0, result.stdout);
+  assert.match(result.stderr, /Invalid Agent World config/);
+  assert.match(result.stderr, expectedMessage);
+}
+
+function startFreeMentionRun(world) {
+  run(world, ['reset']);
+  return run(world, ['user', '--stdin'], 'Start the conversation.');
+}
+
+test('free-mention: an agent routes to any peer with no declared edge and the turn carries that node', () => {
+  const world = makeFreeMentionWorld();
+  const start = startFreeMentionRun(world);
+  const output = run(world, ['complete', '--turn', start.turnId, '--stdin'], '@critic\nTake a look.');
+
+  assert.equal(output.type, 'agent_instruction');
+  assert.equal(output.agent, 'critic');
+  assert.equal(output.workflow.node, 'critic');
+  assert.equal(output.reason, 'agent_mention');
+});
+
+test('free-mention: the prompt lists peer agents as allowed targets and carries the node instruction', () => {
+  const world = makeFreeMentionWorld();
+  const start = startFreeMentionRun(world);
+  const output = run(world, ['complete', '--turn', start.turnId, '--stdin'], '@researcher\nGather prior art.');
+
+  assert.deepEqual(output.workflow.next.map(item => item.node).sort(), ['coordinator', 'critic']);
+  assert.match(output.hostInstruction, /- coordinator: @coordinator/);
+  assert.match(output.hostInstruction, /- critic: @critic/);
+  assert.doesNotMatch(output.hostInstruction, /- researcher: @researcher/);
+  assert.match(output.hostInstruction, /researcher instruction\./);
+});
+
+test('free-mention: an unresolved mention blocks instead of stalling, and reports the token', () => {
+  const world = makeFreeMentionWorld();
+  const start = startFreeMentionRun(world);
+  const output = run(world, ['complete', '--turn', start.turnId, '--stdin'], '@architekt\nPlease review.');
+
+  assert.equal(output.type, 'blocked');
+  assert.equal(output.code, 'unknown_mention_target');
+  assert.deepEqual(output.unresolvedMentions, ['architekt']);
+});
+
+test('free-mention: an available auto-reply target does not swallow an unresolved mention', () => {
+  const world = makeFreeMentionWorld();
+  const start = startFreeMentionRun(world);
+  // researcher's turn is routed from coordinator, so an auto-reply target exists.
+  const routed = run(world, ['complete', '--turn', start.turnId, '--stdin'], '@researcher\nGather prior art.');
+  const output = run(world, ['complete', '--turn', routed.turnId, '--stdin'], '@architekt\nPlease review.');
+
+  assert.equal(output.type, 'blocked');
+  assert.equal(output.code, 'unknown_mention_target');
+  assert.deepEqual(output.unresolvedMentions, ['architekt']);
+});
+
+test('free-mention: a resolved mention alongside an unresolved one still routes', () => {
+  const world = makeFreeMentionWorld();
+  const start = startFreeMentionRun(world);
+  const output = run(world, ['complete', '--turn', start.turnId, '--stdin'], '@critic\n@architekt\nBoth of you.');
+
+  assert.equal(output.type, 'agent_instruction');
+  assert.equal(output.agent, 'critic');
+  // The unresolved token is dropped, not queued as a block that would surface on the next call.
+  const state = JSON.parse(fs.readFileSync(world.statePath, 'utf8'));
+  assert.deepEqual(state.pendingRoutingErrors.filter(e => e.status === 'pending'), []);
+});
+
+test('free-mention: a human paragraph-start mention routes to that agent rather than the entry node', () => {
+  const world = makeFreeMentionWorld();
+  run(world, ['reset']);
+  const output = run(world, ['user', '--stdin'], '@critic\nTake a look at this draft.');
+
+  assert.equal(output.type, 'agent_instruction');
+  assert.equal(output.agent, 'critic');
+  assert.equal(output.workflow.node, 'critic');
+  assert.deepEqual(output.ignoredMentions, []);
+  // Depends on the new resolver: pre-change this world derived enforceEdges=true and offered no
+  // next nodes, so the allowed-next list is what distinguishes free-mention routing from the old
+  // behavior rather than the routing target alone.
+  assert.deepEqual(output.workflow.next.map(item => item.node).sort(), ['coordinator', 'researcher']);
+});
+
+test('free-mention: a non-terminating exchange stops at the turn limit', () => {
+  const world = makeFreeMentionWorld({ turnLimit: 4 });
+  let output = startFreeMentionRun(world);
+  const peers = ['critic', 'coordinator', 'critic', 'coordinator', 'critic', 'coordinator'];
+  let blocked = null;
+  for (const peer of peers) {
+    output = run(world, ['complete', '--turn', output.turnId, '--stdin'], `@${peer}\nKeep going.`);
+    if (output.type === 'blocked') { blocked = output; break; }
+  }
+
+  assert.ok(blocked, 'expected the run to stop at the turn limit');
+  assert.equal(blocked.code, 'turn_limit_reached');
+  assert.equal(blocked.limit, 4);
+});
+
+test('free-mention: a message carrying both a handoff mention and the stop token completes the run', () => {
+  const world = makeFreeMentionWorld();
+  const start = startFreeMentionRun(world);
+  const output = run(world, ['complete', '--turn', start.turnId, '--stdin'], '@critic\nDone here. <world>pass</world>');
+
+  assert.equal(output.type, 'done');
+  // The completion tag is read before mentions are, so the handoff must not also have been queued.
+  const state = JSON.parse(fs.readFileSync(world.statePath, 'utf8'));
+  assert.equal(state.pendingTurns.filter(turn => turn.status === 'pending').length, 0);
+});
+
+test('free-mention: a run completing on the stop token strips every mention line from the final answer', () => {
+  const world = makeFreeMentionWorld();
+  const start = startFreeMentionRun(world);
+  const output = run(world, ['complete', '--turn', start.turnId, '--stdin'],
+    'Here is the answer.\n@researcher\nThanks for the prior art.\n<world>pass</world>');
+
+  assert.equal(output.type, 'done');
+  // stripLeadingMentionLines filters every line that begins with a resolvable mention, not only the
+  // first, so a mid-body thank-you addressed to a peer does not survive into the user-visible answer.
+  assert.match(output.final, /Here is the answer\./);
+  assert.doesNotMatch(output.final, /@researcher/);
+  assert.match(output.final, /Thanks for the prior art\./);
+});
+
+// @human is not special-cased anywhere in the router; it simply resolves to no agent. This is here
+// because addressing the user by name is the natural failure a free-mention prompt has to prevent.
+test('free-mention: a paragraph-start mention of a non-agent blocks the run', () => {
+  const world = makeFreeMentionWorld();
+  const start = startFreeMentionRun(world);
+  const output = run(world, ['complete', '--turn', start.turnId, '--stdin'], '@human\nHere is the summary.');
+
+  assert.equal(output.type, 'blocked');
+  assert.equal(output.code, 'unknown_mention_target');
+});
+
+test('config: edge enforcement is derived from workflow.type when the field is absent', () => {
+  const { loadConfig } = require(router);
+
+  for (const [type, expected] of [['free-mention', false], ['sequential-pipeline', true], ['custom-dag', true]]) {
+    const world = type === 'free-mention'
+      ? makeFreeMentionWorld()
+      : makeWorld();
+    // Strip the declared field in every case, so each row proves the value is derived from the
+    // pattern rather than read back out of the file.
+    const raw = JSON.parse(fs.readFileSync(world.configPath, 'utf8'));
+    raw.workflow.type = type;
+    delete raw.workflow.enforceEdges;
+    fs.writeFileSync(world.configPath, JSON.stringify(raw, null, 2));
+    const config = loadConfig(world.configPath);
+    assert.equal(config.workflow.enforceEdges, expected, `${type} should derive enforceEdges=${expected}`);
+  }
+});
+
+test('config: a declared enforceEdges matching the pattern still loads', () => {
+  const { loadConfig } = require(router);
+  const world = makeFreeMentionWorld({ enforceEdges: false });
+  assert.equal(loadConfig(world.configPath).workflow.enforceEdges, false);
+});
+
+test('config: a declared enforceEdges contradicting the pattern is rejected', () => {
+  assertFreeMentionConfigRejected(
+    { enforceEdges: true },
+    /workflow\.enforceEdges must be false for workflow\.type/
+  );
+});
+
+test('config: an absent or unknown workflow.type is rejected by name', () => {
+  assertFreeMentionConfigRejected({ type: 'Free Mention' }, /workflow\.type must be one of the canonical workflow pattern ids/);
+  assertFreeMentionConfigRejected({ omitType: true }, /workflow\.type must be one of the canonical workflow pattern ids/);
+});
+
+test('config: an unknown workflow.type is reported alone, without an enforcement mismatch', () => {
+  const world = makeFreeMentionWorld({ type: 'Free Mention', enforceEdges: true });
+  const result = runRaw(world, ['reset']);
+  assert.notEqual(result.status, 0, result.stdout);
+  assert.match(result.stderr, /workflow\.type must be one of the canonical workflow pattern ids/);
+  // The mismatch check is suppressed here: reporting it would name a value the author never wrote.
+  assert.doesNotMatch(result.stderr, /workflow\.enforceEdges must be/);
+});
+
+test('config: a free-mention world declaring any edge key is rejected', () => {
+  assertFreeMentionConfigRejected(
+    { edges: { coordinator: ['critic'] } },
+    /workflow\.edges\.coordinator is not allowed in a free-mention world/
+  );
+  assertFreeMentionConfigRejected(
+    { edges: { human: [] } },
+    /workflow\.edges\.human is not allowed in a free-mention world/
+  );
+});
+
+test('config: a free-mention node declaring requires is rejected', () => {
+  assertFreeMentionConfigRejected({
+    nodes: {
+      coordinator: { agent: 'coordinator', instruction: 'Open.' },
+      researcher: { agent: 'researcher', instruction: 'Gather.' },
+      critic: { agent: 'critic', instruction: 'Challenge.', requires: ['researcher'] }
+    }
+  }, /workflow\.nodes\.critic\.requires is not allowed in a free-mention world/);
+});
+
+test('config: a free-mention agent with no node, or with two nodes, is rejected', () => {
+  assertFreeMentionConfigRejected({
+    nodes: {
+      coordinator: { agent: 'coordinator', instruction: 'Open.' },
+      researcher: { agent: 'researcher', instruction: 'Gather.' }
+    }
+  }, /agents\.critic has no workflow node/);
+
+  assertFreeMentionConfigRejected({
+    nodes: {
+      coordinator: { agent: 'coordinator', instruction: 'Open.' },
+      researcher: { agent: 'researcher', instruction: 'Gather.' },
+      critic: { agent: 'critic', instruction: 'Challenge.' },
+      critic_two: { agent: 'critic', instruction: 'Challenge again.' }
+    }
+  }, /agents\.critic is referenced by 2 workflow nodes/);
+});
+
+test('config: a single-agent free-mention world is rejected', () => {
+  assertFreeMentionConfigRejected({
+    agentIds: ['coordinator'],
+    nodes: { coordinator: { agent: 'coordinator', instruction: 'Open.' } }
+  }, /at least two agents in a free-mention world/);
+});
+
+test('config: existing coherent worlds keep loading, with or without a declared enforceEdges', () => {
+  const { loadConfig } = require(router);
+  // .agent-world/ is gitignored, so world.example.json is the only world committed to the repo.
+  const example = path.resolve(__dirname, '..', 'skills', 'agent-world', 'world.example.json');
+  assert.equal(loadConfig(example).workflow.enforceEdges, true);
+
+  // And a world that still declares the field, matching its pattern, is unaffected.
+  const declared = makeWorld();
+  const raw = JSON.parse(fs.readFileSync(declared.configPath, 'utf8'));
+  assert.equal(raw.workflow.enforceEdges, true, 'fixture should declare the field');
+  assert.equal(loadConfig(declared.configPath).workflow.enforceEdges, true);
+});
+
+// A turn carrying a null workflowNode is not reachable through the router's public commands; it
+// only survives in a state file written under an older config. Patch the state to construct one.
+function nullOutPendingTurnNode(world) {
+  const state = JSON.parse(fs.readFileSync(world.statePath, 'utf8'));
+  for (const turn of state.pendingTurns) {
+    if (turn.status === 'pending') turn.workflowNode = null;
+  }
+  fs.writeFileSync(world.statePath, JSON.stringify(state, null, 2));
+}
+
+test('free-mention: a turn carrying no workflow node still blocks on an unresolved mention', () => {
+  const world = makeFreeMentionWorld();
+  const start = startFreeMentionRun(world);
+  nullOutPendingTurnNode(world);
+  const output = run(world, ['complete', '--turn', start.turnId, '--stdin'], '@architekt\nPlease review.');
+
+  assert.equal(output.type, 'blocked');
+  assert.equal(output.code, 'unknown_mention_target');
+});
+
+test('enforced: a turn carrying no workflow node still routes, preserving the legacy path', () => {
+  const world = makeWorld();
+  run(world, ['reset']);
+  const start = run(world, ['user', '--stdin'], 'Start.');
+  nullOutPendingTurnNode(world);
+  const output = run(world, ['complete', '--turn', start.turnId, '--stdin'], '@architect\nDesign it.');
+
+  assert.equal(output.type, 'agent_instruction');
+  assert.equal(output.agent, 'architect');
+  assert.equal(output.workflow.node, null, 'the legacy fallback queues a turn with no workflow node');
+  assert.equal(output.reason, 'agent_mention');
+});
+
+test('enforced: an unresolved mention blocks even when a return edge makes an auto-reply target available', () => {
+  // Without the return edge this assertion passes identically before and after the ordering change,
+  // so the fixture must be the one where autoReplyMentionTarget actually resolves.
+  const world = makeWorld({ architectureCanReturnToRequirements: true });
+  run(world, ['reset']);
+  const start = run(world, ['user', '--stdin'], 'Start.');
+  const routed = run(world, ['complete', '--turn', start.turnId, '--stdin'], '@architect\nDesign it.');
+  const output = run(world, ['complete', '--turn', routed.turnId, '--stdin'], '@architekt\nPlease review.');
+
+  assert.equal(output.type, 'blocked');
+  assert.equal(output.code, 'unknown_mention_target');
+  assert.deepEqual(output.unresolvedMentions, ['architekt']);
+});
+
+test('enforced: a terminal node with no outgoing edges still idles on an unresolved mention', () => {
+  const world = makeWorld();
+  run(world, ['reset']);
+  const start = run(world, ['user', '--stdin'], 'Start.');
+  let output = run(world, ['complete', '--turn', start.turnId, '--stdin'], '@architect\nDesign it.');
+  output = run(world, ['complete', '--turn', output.turnId, '--stdin'], '@dev\nBuild it.');
+  output = run(world, ['complete', '--turn', output.turnId, '--stdin'], '@qa\n@sec\nReview it.');
+  const qaTurn = output.type === 'agent_instruction_batch' ? output.turns[0] : output;
+  const secTurn = output.type === 'agent_instruction_batch' ? output.turns[1] : null;
+  output = run(world, ['complete', '--turn', qaTurn.turnId, '--stdin'], '@pm\nQA approved.');
+  if (secTurn) output = run(world, ['complete', '--turn', secTurn.turnId, '--stdin'], '@pm\nSecurity approved.');
+  else output = run(world, ['complete', '--turn', output.turnId, '--stdin'], '@pm\nSecurity approved.');
+
+  assert.equal(output.workflow.node, 'final', 'expected to reach the terminal node');
+  const terminal = run(world, ['complete', '--turn', output.turnId, '--stdin'], '@architekt\nAll done.');
+
+  assert.equal(terminal.type, 'idle');
+});
+
+test('config: a rejection through the file handoff path exits non-zero and writes no result file', () => {
+  const world = makeFreeMentionWorld({ enforceEdges: true });
+  const requestPath = path.join(world.cwd, testHandoffName('request'));
+  const resultPath = path.join(world.cwd, testHandoffName('result'));
+  fs.mkdirSync(path.dirname(requestPath), { recursive: true });
+  fs.mkdirSync(path.dirname(resultPath), { recursive: true });
+  fs.writeFileSync(requestPath, JSON.stringify({
+    configPath: world.configPath,
+    statePath: world.statePath,
+    resultPath,
+    command: 'user',
+    content: 'Start.'
+  }, null, 2));
+
+  const result = spawnSync(process.execPath, [router, 'file', '--request', requestPath], {
+    cwd: world.cwd,
+    env: { ...process.env },
+    encoding: 'utf8'
+  });
+
+  assert.notEqual(result.status, 0, result.stdout);
+  assert.match(result.stderr, /workflow\.enforceEdges must be false/);
+  assert.equal(fs.existsSync(resultPath), false, 'a config error must write no result file');
+});
+
+test('config: the schema enum and the router pattern list do not drift apart', () => {
+  const Ajv = require('ajv/dist/2020');
+  const { loadConfig } = require(router);
+  const schemaPath = path.resolve(__dirname, '..', 'skills', 'agent-world', 'world.schema.json');
+  const schema = JSON.parse(fs.readFileSync(schemaPath, 'utf8'));
+  const enumIds = schema.properties.workflow.properties.type.enum;
+
+  // schema -> router: every id the schema advertises must be one the router will load. Without this,
+  // a schema-only addition yields a world that validates but that the router refuses on every
+  // command, including reset.
+  for (const type of enumIds) {
+    const world = makeFreeMentionWorld({
+      type,
+      // Only free-mention forbids edges; every other pattern needs a graph to be meaningful, but a
+      // bare one is enough to prove the type itself is accepted.
+      ...(type === 'free-mention' ? {} : { edges: { coordinator: ['critic'] } })
+    });
+    assert.doesNotThrow(() => loadConfig(world.configPath), `schema id ${type} must load`);
+  }
+
+  // router -> schema: every id the router accepts must validate against the published schema, or a
+  // generated world would fail init's mandatory schema check and Studio's validator.
+  const ajv = new Ajv({ strict: false });
+  const validate = ajv.compile(schema);
+  const { CANONICAL_WORKFLOW_TYPES } = require(router);
+  for (const type of CANONICAL_WORKFLOW_TYPES) {
+    const world = makeFreeMentionWorld({
+      type,
+      ...(type === 'free-mention' ? {} : { edges: { coordinator: ['critic'] } })
+    });
+    const doc = JSON.parse(fs.readFileSync(world.configPath, 'utf8'));
+    assert.equal(validate(doc), true, `${type}: ${JSON.stringify(validate.errors)}`);
+  }
+  // Compare the real lists, not copies of them, so neither can gain an id the other lacks.
+  assert.deepEqual([...CANONICAL_WORKFLOW_TYPES].sort(), enumIds.slice().sort());
+});
+
+test('host action: requestedBy is the emitting agent, not a peer the block names', () => {
+  // requestedBy is a router output, not an agent-writable routing directive. Honoring a peer name
+  // would pair the host result with the acting turn's node, so turn.agent and the turn's workflow
+  // node would disagree - the identity free-mention routing depends on.
+  const world = makeFreeMentionWorld();
+  const start = startFreeMentionRun(world);
+  const action = run(world, ['complete', '--turn', start.turnId, '--stdin'],
+    'Working on it.\n```agent-world-host-action\n{"requestedBy": "researcher", "kind": "shell", "reason": "list files", "payload": {"command": "ls"}}\n```');
+
+  assert.equal(action.type, 'host_action');
+  assert.equal(action.requestedBy, 'coordinator');
+
+  const next = run(world, ['complete', '--action', action.actionId, '--stdin'],
+    JSON.stringify({ status: 'succeeded', summary: 'listed' }));
+  assert.equal(next.type, 'agent_instruction');
+  assert.equal(next.agent, 'coordinator');
+  assert.equal(next.workflow.node, 'coordinator', 'the resumed turn must carry its own node');
+});
+
+test('config: a free-mention world with a malformed turnLimit is rejected', () => {
+  for (const turnLimit of [0, -1, 'many']) {
+    const world = makeFreeMentionWorld();
+    const raw = JSON.parse(fs.readFileSync(world.configPath, 'utf8'));
+    raw.world.turnLimit = turnLimit;
+    fs.writeFileSync(world.configPath, JSON.stringify(raw, null, 2));
+    const result = runRaw(world, ['reset']);
+    assert.notEqual(result.status, 0, `turnLimit ${JSON.stringify(turnLimit)} should be rejected`);
+    assert.match(result.stderr, /world\.turnLimit must be an integer greater than 0/);
+  }
 });
